@@ -31,9 +31,9 @@ extern "C"
 
 typedef enum
 {
-	RECEIVER_MODE_OFF = 0,
-	RECEIVER_MODE_RX = 1
-} receiver_mode_t;
+	HYDRASDR_RECEIVER_MODE_OFF = 0,
+	HYDRASDR_RECEIVER_MODE_RX = 1
+} hydrasdr_receiver_mode_t;
 
 // Commands (usb vendor request) shared between Firmware and Host.
 #define HYDRASDR_CMD_MAX (28)
