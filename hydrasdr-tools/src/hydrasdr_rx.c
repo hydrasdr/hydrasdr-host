@@ -193,7 +193,7 @@ t_u64toa ascii_u64_data1;
 t_u64toa ascii_u64_data2;
 t_u64toa ascii_u64_data3;
 
-receiver_mode_t receiver_mode = RECEIVER_MODE_RX;
+hydrasdr_receiver_mode_t receiver_mode = HYDRASDR_RECEIVER_MODE_RX;
 
 uint32_t vga_gain = DEFAULT_VGA_IF_GAIN;
 uint32_t lna_gain = DEFAULT_LNA_GAIN;
@@ -745,7 +745,7 @@ int main(int argc, char** argv)
 		freq_hz = DEFAULT_FREQ_HZ;
 	}
 
-	receiver_mode = RECEIVER_MODE_RX;
+	receiver_mode = HYDRASDR_RECEIVER_MODE_RX;
 	if( receive_wav ) 
 	{
 		if (sample_type_val == HYDRASDR_SAMPLE_RAW)
@@ -757,7 +757,7 @@ int main(int argc, char** argv)
 
 		time (&rawtime);
 		timeinfo = localtime (&rawtime);
-		receiver_mode = RECEIVER_MODE_RX;
+		receiver_mode = HYDRASDR_RECEIVER_MODE_RX;
 		/* File format HydraSDR_<freq_Hz>_<YYYYMMDD>_<HHMMSS>_<sample_type>_<channels>.wav */
 		strftime(date_time, DATE_TIME_MAX_LEN, "%Y%m%d_%H%M%S", timeinfo);
 		snprintf(path_file, PATH_FILE_MAX_LEN, "HydraSDR_%uHz_%s_%s_%s.wav", 

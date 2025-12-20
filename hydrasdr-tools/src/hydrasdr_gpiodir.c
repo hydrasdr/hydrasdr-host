@@ -131,7 +131,7 @@ int dump_port(struct hydrasdr_device* device, hydrasdr_gpio_port_t port_number)
 	hydrasdr_gpio_pin_t pin_number;
 	int result = HYDRASDR_SUCCESS;
 
-	for(pin_number = GPIO_PIN0; pin_number < (GPIO_PIN31+1); pin_number++)
+	for(pin_number = HYDRASDR_GPIO_PIN0; pin_number < (HYDRASDR_GPIO_PIN31+1); pin_number++)
 	{
 		result = dump_port_pin(device, port_number, pin_number);
 	}
@@ -143,7 +143,7 @@ int dump_ports(struct hydrasdr_device* device)
 	uint8_t port_number;
 	int result = HYDRASDR_SUCCESS;
 
-	for(port_number = GPIO_PORT0; port_number < (GPIO_PORT7+1); port_number++)
+	for(port_number = HYDRASDR_GPIO_PORT0; port_number < (HYDRASDR_GPIO_PORT7+1); port_number++)
 	{
 		result = dump_port(device, port_number);
 		if( result != HYDRASDR_SUCCESS ) {

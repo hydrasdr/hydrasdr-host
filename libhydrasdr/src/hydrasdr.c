@@ -1236,7 +1236,7 @@ int hydrasdr_list_devices(uint64_t *serials, int count)
 		}
 	}
 
-	int ADDCALL hydrasdr_set_receiver_mode(hydrasdr_device_t* device, receiver_mode_t value)
+	int ADDCALL hydrasdr_set_receiver_mode(hydrasdr_device_t* device, hydrasdr_receiver_mode_t value)
 	{
 		int result;
 		result = libusb_control_transfer(
@@ -1268,7 +1268,7 @@ int hydrasdr_list_devices(uint64_t *serials, int count)
 		memset(device->dropped_buffers_queue, 0, RAW_BUFFER_COUNT * sizeof(uint32_t));
 		device->dropped_buffers = 0;
 
-		result = hydrasdr_set_receiver_mode(device, RECEIVER_MODE_OFF);
+		result = hydrasdr_set_receiver_mode(device, HYDRASDR_RECEIVER_MODE_OFF);
 		if (result != HYDRASDR_SUCCESS)
 		{
 			return result;
@@ -1276,7 +1276,7 @@ int hydrasdr_list_devices(uint64_t *serials, int count)
 
 		libusb_clear_halt(device->usb_device, LIBUSB_ENDPOINT_IN | 1);
 
-		result = hydrasdr_set_receiver_mode(device, RECEIVER_MODE_RX);
+		result = hydrasdr_set_receiver_mode(device, HYDRASDR_RECEIVER_MODE_RX);
 		if (result == HYDRASDR_SUCCESS)
 		{
 			device->ctx = ctx;
@@ -1291,7 +1291,7 @@ int hydrasdr_list_devices(uint64_t *serials, int count)
 		int result1, result2;
 
 		device->stop_requested = true;
-		result1 = hydrasdr_set_receiver_mode(device, RECEIVER_MODE_OFF);
+		result1 = hydrasdr_set_receiver_mode(device, HYDRASDR_RECEIVER_MODE_OFF);
 		result2 = kill_io_threads(device);
 
 		if (result1 != HYDRASDR_SUCCESS)
