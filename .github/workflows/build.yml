@@ -108,15 +108,15 @@ jobs:
     - name: Configure build (Linux)
       if: matrix.platform == 'linux'
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF -DENABLE_SHARED_LIB=ON
 
     - name: Configure build (macOS)
       if: matrix.platform == 'macos'
       run: |
         if [ "${{ matrix.arch }}" = "arm64" ]; then
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SHARED_LIB=ON
         else
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DENABLE_SHARED_LIB=ON
         fi
 
     - name: Configure build (Windows)
@@ -126,7 +126,8 @@ jobs:
           -DLIBUSB_INCLUDE_DIR="$PWD\deps\libusb\include\libusb-1.0" `
           -DLIBUSB_LIBRARIES="$PWD\deps\libusb\MS64\dll\libusb-1.0.lib" `
           -DTHREADS_PTHREADS_INCLUDE_DIR="$PWD\deps\pthreads\include" `
-          -DTHREADS_PTHREADS_WIN32_LIBRARY="$PWD\deps\pthreads\lib\x64\pthreadVC2.lib"
+          -DTHREADS_PTHREADS_WIN32_LIBRARY="$PWD\deps\pthreads\lib\x64\pthreadVC2.lib" `
+          -DENABLE_SHARED_LIB=ON
 
     # === Build ===
     - name: Build (Linux/macOS)
@@ -150,7 +151,7 @@ jobs:
       run: |
         ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         mkdir -p "$ARTIFACT_DIR"
-        cp build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
+        cp -a build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/"
 
     - name: Package artifacts (macOS)
@@ -158,7 +159,7 @@ jobs:
       run: |
         ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         mkdir -p "$ARTIFACT_DIR"
-        cp build/libhydrasdr/src/libhydrasdr.dylib* "$ARTIFACT_DIR/" 2>/dev/null || true
+        cp -a build/libhydrasdr/src/libhydrasdr.dylib* "$ARTIFACT_DIR/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/" 2>/dev/null || true
 
     - name: Package artifacts (Windows)
@@ -192,8 +193,8 @@ jobs:
         mkdir -p "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}"
         mkdir -p "${PACKAGE_DIR}/etc/udev/rules.d"
         
-        # Copy binaries and libraries
-        cp build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
+        # Copy binaries and libraries (use cp -a to preserve symlinks)
+        cp -a build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "${PACKAGE_DIR}/usr/bin/"
         
         # Copy udev rules file from repository
@@ -208,6 +209,7 @@ jobs:
         Architecture: ${ARCH}
         Depends: libusb-1.0-0 (>= 1.0.20)
         Maintainer: ${{ env.MAINTAINER }}
+        Homepage: ${{ env.HOMEPAGE }}
         Description: HydraSDR RFOne Host Tools and Libraries
          Host tools and shared libraries for HydraSDR RFOne software-defined radio.
          Provides command-line utilities and development libraries for interfacing
@@ -216,10 +218,7 @@ jobs:
          This package includes:
           - libhydrasdr shared library
           - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)
-          - Development headers and pkg-config files
-         .
-         Built for: ${{ matrix.name }}
-        Homepage: ${{ env.HOMEPAGE }}
+          - udev rules for non-root device access
         EOF
         
         # Create maintenance scripts
@@ -273,7 +272,7 @@ jobs:
         # Set permissions
         find "${PACKAGE_DIR}" -type d -exec chmod 755 {} \;
         find "${PACKAGE_DIR}/usr/bin" -type f -exec chmod 755 {} \;
-        find "${PACKAGE_DIR}/usr/lib" -name "*.so*" -exec chmod 644 {} \;
+        find "${PACKAGE_DIR}/usr/lib" -name "*.so*" -type f -exec chmod 644 {} \;
         chmod 644 "${PACKAGE_DIR}/etc/udev/rules.d/51-hydrasdr.rules"
         
         # Build package
@@ -519,7 +518,7 @@ jobs:
     # === Build Configuration ===
     - name: Configure build
       run: |
-        CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF"
+        CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF -DENABLE_SHARED_LIB=ON"
         
         # Add extra configuration if specified
         if [ -n "${{ matrix.extra_config }}" ]; then
@@ -557,7 +556,7 @@ jobs:
       run: |
         ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         mkdir -p "$ARTIFACT_DIR"
-        cp build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
+        cp -a build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/"
 
     # === Create .deb package for Debian/Ubuntu/Linux Mint ===
@@ -586,8 +585,8 @@ jobs:
         mkdir -p "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}"
         mkdir -p "${PACKAGE_DIR}/etc/udev/rules.d"
         
-        # Copy binaries and libraries
-        cp build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
+        # Copy binaries and libraries (use cp -a to preserve symlinks)
+        cp -a build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "${PACKAGE_DIR}/usr/bin/"
         
         # Copy udev rules file from repository
@@ -602,6 +601,7 @@ jobs:
         Architecture: ${ARCH}
         Depends: libusb-1.0-0 (>= 1.0.20)
         Maintainer: ${{ env.MAINTAINER }}
+        Homepage: ${{ env.HOMEPAGE }}
         Description: HydraSDR RFOne Host Tools and Libraries (${DIST_DESC})
          Host tools and shared libraries for HydraSDR RFOne software-defined radio.
          Provides command-line utilities and development libraries for interfacing
@@ -610,10 +610,7 @@ jobs:
          This package includes:
           - libhydrasdr shared library
           - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)
-          - Development headers and pkg-config files
-         .
-         Built for: ${{ matrix.name }}
-        Homepage: ${{ env.HOMEPAGE }}
+          - udev rules for non-root device access
         EOF
         
         # Create maintenance scripts
@@ -664,10 +661,10 @@ jobs:
         
         gzip -9 "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/changelog.Debian"
         
-        # Set permissions
+        # Set permissions (use -type f to only chmod actual files, not symlinks)
         find "${PACKAGE_DIR}" -type d -exec chmod 755 {} \;
         find "${PACKAGE_DIR}/usr/bin" -type f -exec chmod 755 {} \;
-        find "${PACKAGE_DIR}/usr/lib" -name "*.so*" -exec chmod 644 {} \;
+        find "${PACKAGE_DIR}/usr/lib" -name "*.so*" -type f -exec chmod 644 {} \;
         chmod 644 "${PACKAGE_DIR}/etc/udev/rules.d/51-hydrasdr.rules"
         
         # Build and verify package
@@ -725,14 +722,14 @@ jobs:
         This package includes:
         - libhydrasdr shared library
         - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)
-        - Development headers and pkg-config files
+        - udev rules for non-root device access
         
         Built for: ${{ matrix.name }}
         
         %prep
         # Copy source files to build directory
         mkdir -p %{_builddir}/%{name}-%{version}
-        cp -r %{_sourcedir}/* %{_builddir}/%{name}-%{version}/
+        cp -a %{_sourcedir}/* %{_builddir}/%{name}-%{version}/
         
         %build
         # Files already built, just verify they exist
@@ -747,8 +744,8 @@ jobs:
         mkdir -p %{buildroot}/usr/bin
         mkdir -p %{buildroot}/etc/udev/rules.d
         
-        # Copy files from build directory
-        cp %{_builddir}/%{name}-%{version}/build/libhydrasdr/src/libhydrasdr.so* %{buildroot}/usr/lib/ || true
+        # Copy files from build directory (use cp -a to preserve symlinks)
+        cp -a %{_builddir}/%{name}-%{version}/build/libhydrasdr/src/libhydrasdr.so* %{buildroot}/usr/lib/ || true
         cp %{_builddir}/%{name}-%{version}/build/hydrasdr-tools/src/hydrasdr_* %{buildroot}/usr/bin/
         cp %{_builddir}/%{name}-%{version}/hydrasdr-tools/51-hydrasdr.rules %{buildroot}/etc/udev/rules.d/51-hydrasdr.rules
         
@@ -828,8 +825,8 @@ jobs:
         - Built from commit ${{ github.sha }}
         EOF
         
-        # Copy source files to SOURCES directory
-        cp -r . ~/rpmbuild/SOURCES/
+        # Copy source files to SOURCES directory (use cp -a to preserve symlinks)
+        cp -a . ~/rpmbuild/SOURCES/
         
         # Build the RPM package
         rpmbuild -bb ~/rpmbuild/SPECS/${{ env.PACKAGE_NAME }}.spec \
@@ -903,8 +900,8 @@ jobs:
           mkdir -p "${pkgdir}/etc/udev/rules.d"
           mkdir -p "${pkgdir}/usr/share/licenses/${pkgname}"
           
-          # Copy files from build directory (using absolute path from original location)
-          cp {{ ORIGINAL_DIR }}/build/libhydrasdr/src/libhydrasdr.so* "${pkgdir}/usr/lib/" || true
+          # Copy files from build directory (using absolute path from original location, use cp -a for symlinks)
+          cp -a {{ ORIGINAL_DIR }}/build/libhydrasdr/src/libhydrasdr.so* "${pkgdir}/usr/lib/" || true
           cp {{ ORIGINAL_DIR }}/build/hydrasdr-tools/src/hydrasdr_* "${pkgdir}/usr/bin/"
           cp {{ ORIGINAL_DIR }}/hydrasdr-tools/51-hydrasdr.rules "${pkgdir}/etc/udev/rules.d/51-hydrasdr.rules"
           
