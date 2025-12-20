@@ -81,6 +81,18 @@ find_package(Threads REQUIRED)
 add_subdirectory(src)
 
 ########################################################################
+# Set library versioning for proper symlink creation by ldconfig
+# This ensures ldconfig creates:
+#   libhydrasdr.so -> libhydrasdr.so.X
+#   libhydrasdr.so.X -> libhydrasdr.so.X.Y.Z
+#   libhydrasdr.so.X.Y.Z (actual library)
+########################################################################
+set_target_properties(hydrasdr PROPERTIES
+    VERSION ${HYDRASDR_VER_MAJOR}.${HYDRASDR_VER_MINOR}.${HYDRASDR_VER_REVISION}
+    SOVERSION ${HYDRASDR_VER_MAJOR}
+)
+
+########################################################################
 # Create Cmake Config-file package interface
 ########################################################################
 include(CMakePackageConfigHelpers)
