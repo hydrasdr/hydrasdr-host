@@ -159,7 +159,7 @@ jobs:
       run: |
         ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         mkdir -p "$ARTIFACT_DIR"
-        cp -a build/libhydrasdr/src/libhydrasdr.dylib* "$ARTIFACT_DIR/" 2>/dev/null || true
+        cp -a build/libhydrasdr/src/libhydrasdr*.dylib "$ARTIFACT_DIR/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/" 2>/dev/null || true
 
     - name: Package artifacts (Windows)
