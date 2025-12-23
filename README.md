@@ -18,7 +18,7 @@ See all major issues affecting libusb v1.0.24:
 * https://github.com/libusb/libusb/issues/982 libusb_set_interface_alt_setting(...) crashes in 1.0.24 in Win10. #982
 For more details see https://github.com/libusb/libusb/issues & https://github.com/libusb/libusb/issues/777
 
-## How to build rfone_host software on Windows:
+## How to build hydrasdr-host software on Windows:
 
 ### Prerequisites for MSYS2/MinGW64:
 
@@ -33,16 +33,16 @@ For more details see https://github.com/libusb/libusb/issues & https://github.co
 
 ### For VisualStudio 2019 or later:
 
-* `git clone https://github.com/hydrasdr/rfone_host.git rfone_host`
+* `git clone https://github.com/hydrasdr/hydrasdr-host.git hydrasdr-host`
 * Download https://github.com/libusb/libusb/releases/download/v1.0.23/libusb-1.0.23.7z
-* Extract **libusb-1.0.23.7z** to rfone_host directory
-  * You should have **rfone_host\libusb-1.0.23**
+* Extract **libusb-1.0.23.7z** to hydrasdr-host directory
+  * You should have **hydrasdr-host\libusb-1.0.23**
     * Inside this directory there is README.txt, libusb-1.0.def and some directories
 * Download https://gcc.gnu.org/pub/pthreads-win32/pthreads-w32-2-9-1-release.zip
-* Extract **pthreads-w32-2-9-1-release.zip** to rfone_host directory **libpthread-2-9-1-win**
-  * You should have **rfone_host\libpthread-2-9-1-win**
+* Extract **pthreads-w32-2-9-1-release.zip** to hydrasdr-host directory **libpthread-2-9-1-win**
+  * You should have **hydrasdr-host\libpthread-2-9-1-win**
     * Inside this directory there is lot of README files and some directories (dll, include, lib)
-* Launch rfone_host\libhydrasdr\vc\hydrasdr_2019.sln with VisualStudio 2019, choose **Release** and **Build Solution**
+* Launch hydrasdr-host\libhydrasdr\vc\hydrasdr_2019.sln with VisualStudio 2019, choose **Release** and **Build Solution**
 
 ### For MSYS2/MinGW64:
 Launch mingw64
@@ -51,9 +51,9 @@ Launch mingw64
 
 `pacman -S cmake mingw-w64-x86_64-libusb mingw-w64-x86_64-ninja`
 
-`git clone https://github.com/hydrasdr/rfone_host.git rfone_host`
+`git clone https://github.com/hydrasdr/hydrasdr-host.git hydrasdr-host`
 
-`cd rfone_host`
+`cd hydrasdr-host`
 
 `mkdir build`
 
@@ -69,7 +69,7 @@ For a release build with install (need need administrative privileges):
 For a specific build type (e.g., Debug):
 `cmake --build . --config Debug`
 
-## How to build the rfone_host software on Linux:
+## How to build the hydrasdr-host software on Linux:
 
 ### Prerequisites for Linux (Debian/Ubuntu/Raspbian):
 
@@ -77,11 +77,11 @@ For a specific build type (e.g., Debug):
 `sudo apt-get install build-essential cmake libusb-1.0-0-dev pkg-config git`
 
 
-### Build rfone_host software on Linux:
+### Build hydrasdr-host software on Linux:
 
-`git clone https://github.com/hydrasdr/rfone_host.git rfone_host`
+`git clone https://github.com/hydrasdr/hydrasdr-host.git hydrasdr-host`
 
-`cd rfone_host`
+`cd hydrasdr-host`
 
 `mkdir build`
 
@@ -97,11 +97,11 @@ For a specific build type (e.g., Debug):
 
 ## Clean CMake temporary files/dirs:
 
-`cd rfone_host/build`
+`cd hydrasdr-host/build`
 
 `rm -rf *`
 
-## How to build rfone_host software on FreeBSD.
+## How to build hydrasdr-host software on FreeBSD.
 
 ### Get the prerequisites (from root)
 
@@ -109,9 +109,9 @@ For a specific build type (e.g., Debug):
 
 ### Build
 
-`git clone https:\\github.com\hydrasdr\rfone_host.git`
+`git clone https:\\github.com\hydrasdr\hydrasdr-host.git`
 
-`cd rfone_host`
+`cd hydrasdr-host`
 
 `mkdir build`
 
@@ -129,7 +129,7 @@ For a specific build type (e.g., Debug):
 (from root)
 `useradd -a -G plugdev <user>`
 
-## How to build the rfone_host software on MacOS
+## How to build the hydrasdr-host software on MacOS
 
 ### Prerequisites
 
@@ -151,8 +151,8 @@ brew install cmake libusb pkg-config git
 
 #### Clone the repository
 ```bash
-git clone https://github.com/hydrasdr/rfone_host.git rfone_host
-cd rfone_host
+git clone https://github.com/hydrasdr/hydrasdr-host.git hydrasdr-host
+cd hydrasdr-host
 mkdir build
 cd build
 ```

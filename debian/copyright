@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: HydraSDR RFOne Host Tools
+Upstream-Name: HydraSDR Host Tools and Shared Library
 Upstream-Contact: Benjamin Vernoux <bvernoux@hydrasdr.com>
-Source: https://github.com/hydrasdr/rfone_host
+Source: https://github.com/hydrasdr/hydrasdr-host
 
 Files: *
 Copyright: 2025 Benjamin Vernoux <bvernoux@hydrasdr.com>

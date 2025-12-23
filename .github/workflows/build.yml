@@ -4,10 +4,10 @@
 # Unauthorized use, modification, or distribution for non-HydraSDR products is prohibited.
 # All rights reserved.
 #
-# HydraSDR RFOne Host Tools Build and Release Workflow
+# HydraSDR Software Defined Radio Host Tools  Build and Release Workflow
 # For more information about HydraSDR products: https://hydrasdr.com
 
-name: Build and Release HydraSDR RFOne Host Tools + Shared Lib / DLL (Windows, GNU/Linux, MacOS)
+name: Build and Release HydraSDR Software Defined Radio Host Tools  + Shared Lib / DLL (Windows, GNU/Linux, MacOS)
 
 on:
   push:
@@ -210,7 +210,7 @@ jobs:
         Depends: libusb-1.0-0 (>= 1.0.20)
         Maintainer: ${{ env.MAINTAINER }}
         Homepage: ${{ env.HOMEPAGE }}
-        Description: HydraSDR RFOne Host Tools and Libraries
+        Description: HydraSDR Software Defined Radio Host Tools  and Libraries
          Host tools and shared libraries for HydraSDR RFOne software-defined radio.
          Provides command-line utilities and development libraries for interfacing
          with HydraSDR RFOne hardware.
@@ -246,9 +246,9 @@ jobs:
         # Create documentation
         cat > "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/copyright" << EOF
         Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-        Upstream-Name: HydraSDR RFOne Host Tools
+        Upstream-Name: HydraSDR Software Defined Radio Host Tools 
         Upstream-Contact: ${{ env.MAINTAINER }}
-        Source: https://github.com/hydrasdr/rfone_host
+        Source: https://github.com/hydrasdr/hydrasdr-host
         
         Files: *
         Copyright: 2025 ${{ env.MAINTAINER }}
@@ -602,7 +602,7 @@ jobs:
         Depends: libusb-1.0-0 (>= 1.0.20)
         Maintainer: ${{ env.MAINTAINER }}
         Homepage: ${{ env.HOMEPAGE }}
-        Description: HydraSDR RFOne Host Tools and Libraries (${DIST_DESC})
+        Description: HydraSDR Software Defined Radio Host Tools  and Libraries (${DIST_DESC})
          Host tools and shared libraries for HydraSDR RFOne software-defined radio.
          Provides command-line utilities and development libraries for interfacing
          with HydraSDR RFOne hardware.
@@ -638,9 +638,9 @@ jobs:
         # Create documentation
         cat > "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/copyright" << EOF
         Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-        Upstream-Name: HydraSDR RFOne Host Tools
+        Upstream-Name: HydraSDR Software Defined Radio Host Tools 
         Upstream-Contact: ${{ env.MAINTAINER }}
-        Source: https://github.com/hydrasdr/rfone_host
+        Source: https://github.com/hydrasdr/hydrasdr-host
         
         Files: *
         Copyright: 2025 ${{ env.MAINTAINER }}
@@ -706,7 +706,7 @@ jobs:
         Name:           ${{ env.PACKAGE_NAME }}
         Version:        ${PACKAGE_VERSION}
         Release:        1%{?dist}
-        Summary:        HydraSDR RFOne Host Tools and Libraries
+        Summary:        HydraSDR Software Defined Radio Host Tools  and Libraries
         
         License:        Custom-HydraSDR
         URL:            ${{ env.HOMEPAGE }}
@@ -887,7 +887,7 @@ jobs:
         pkgname=${{ env.PACKAGE_NAME }}
         pkgver={{ PACKAGE_VERSION }}
         pkgrel=1
-        pkgdesc="HydraSDR RFOne Host Tools and Libraries"
+        pkgdesc="HydraSDR Software Defined Radio Host Tools  and Libraries"
         arch=('x86_64')
         url="${{ env.HOMEPAGE }}"
         license=('custom:HydraSDR')
@@ -907,7 +907,7 @@ jobs:
           
           # Create license file
           cat > "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" << 'LICENSE_EOF'
-        HydraSDR RFOne Host Tools
+        HydraSDR Software Defined Radio Host Tools 
         
         Copyright (c) 2025, ${{ env.MAINTAINER }}
         
@@ -1208,9 +1208,9 @@ jobs:
         \`\`\`bash
         # Download the appropriate .deb file for your distribution
         # Examples:
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.deb
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-Noble-Numbat-v${VERSION}.deb
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Debian-12-Bookworm-v${VERSION}.deb
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.deb
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-Noble-Numbat-v${VERSION}.deb
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Debian-12-Bookworm-v${VERSION}.deb
         
         # Install the package
         sudo dpkg -i hydrasdr-host-tools-[DISTRIBUTION]-v[VERSION].deb
@@ -1225,8 +1225,8 @@ jobs:
         \`\`\`bash
         # Download the appropriate .rpm file for your distribution
         # Examples:
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Fedora-42-v${VERSION}.rpm
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-AlmaLinux-9-v${VERSION}.rpm
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Fedora-42-v${VERSION}.rpm
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-AlmaLinux-9-v${VERSION}.rpm
         
         # Install with automatic dependency resolution
         sudo dnf install ./hydrasdr-host-tools-[DISTRIBUTION]-v[VERSION].rpm
@@ -1238,7 +1238,7 @@ jobs:
         #### openSUSE (.rpm packages):
         \`\`\`bash
         # Download the appropriate .rpm file
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-openSUSE-Tumbleweed-v${VERSION}.rpm
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-openSUSE-Tumbleweed-v${VERSION}.rpm
         
         # Install with automatic dependency resolution
         sudo zypper install ./hydrasdr-host-tools-openSUSE-Tumbleweed-v[VERSION].rpm
@@ -1250,7 +1250,7 @@ jobs:
         #### Arch Linux (.pkg.tar.zst packages):
         \`\`\`bash
         # Download the .pkg.tar.zst file
-        # wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Arch-Linux-v${VERSION}.pkg.tar.zst
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Arch-Linux-v${VERSION}.pkg.tar.zst
         
         # Install with pacman
         sudo pacman -U hydrasdr-host-tools-Arch-Linux-v[VERSION].pkg.tar.zst
@@ -1271,7 +1271,7 @@ jobs:
         #### macOS:
         \`\`\`bash
         # Download and extract the .tar.gz file
-        wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/[package-name].tar.gz
+        wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/[package-name].tar.gz
         tar -xzf [package-name].tar.gz
         
         # Copy binaries to your PATH
@@ -1284,7 +1284,7 @@ jobs:
         #### Other Linux Distributions (if no native package available):
         \`\`\`bash
         # Download the appropriate .tar.gz archive
-        wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/[package-name].tar.gz
+        wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/[package-name].tar.gz
         
         # Extract and install manually
         tar -xzf [package-name].tar.gz
@@ -1302,11 +1302,11 @@ jobs:
         Ubuntu 24.04 and 22.04 also provide .zip archives for automated workflows:
         \`\`\`bash
         # Download Ubuntu 24.04: .zip archive (for CI/CD)
-        wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-Noble-Numbat-v${VERSION}.zip
+        wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-Noble-Numbat-v${VERSION}.zip
         unzip hydrasdr-host-tools-Ubuntu-24.04-LTS-Noble-Numbat-v${VERSION}.zip
         
         # Or for Ubuntu 22.04:
-        wget https://github.com/hydrasdr/rfone_host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.zip
+        wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.zip
         unzip hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.zip
         \`\`\`
 

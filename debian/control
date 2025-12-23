@@ -19,7 +19,7 @@ Depends: libhydrasdr0 (= ${binary:Version}),
          libusb-1.0-0-dev,
          ${misc:Depends}
 Multi-Arch: same
-Description: HydraSDR RFOne Host Tools and Libraries (Debian/Ubuntu)
+Description: HydraSDR Software Defined Radio Host Tools and Libraries (Debian/Ubuntu)
  Host tools and shared libraries for HydraSDR RFOne software-defined radio.
  Provides command-line utilities and development libraries for interfacing
  with HydraSDR RFOne hardware.
@@ -32,7 +32,7 @@ Architecture: any
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Multi-Arch: same
-Description: HydraSDR RFOne Host Tools and Libraries (Debian/Ubuntu)
+Description: HydraSDR Software Defined Radio Host Tools and Libraries (Debian/Ubuntu)
  Host tools and shared libraries for HydraSDR RFOne software-defined radio.
  Provides command-line utilities and development libraries for interfacing
  with HydraSDR RFOne hardware.
@@ -45,7 +45,7 @@ Depends: ${misc:Depends},
  ${shlibs:Depends},
  libusb-1.0-0 (>= 1.0.20),
  libhydrasdr0 (= ${binary:Version}),
-Description: HydraSDR RFOne Host Tools and Libraries (Debian/Ubuntu)
+Description: HydraSDR Software Defined Radio Host Tools and Libraries (Debian/Ubuntu)
  Host tools and shared libraries for HydraSDR RFOne software-defined radio.
  Provides command-line utilities and development libraries for interfacing
  with HydraSDR RFOne hardware.

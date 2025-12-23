@@ -21,7 +21,7 @@ RUN dnf update -y --best --allowerasing &&\
         SoapySDR-devel \
         tar
 
-ARG HOST_TOOLS_REF=https://github.com/hydrasdr/rfone_host.git
+ARG HOST_TOOLS_REF=https://github.com/hydrasdr/hydrasdr-host.git
 RUN git clone --depth 1 ${HOST_TOOLS_REF} hydrasdr-host &&\
     cd hydrasdr-host &&\
     cmake -B build \

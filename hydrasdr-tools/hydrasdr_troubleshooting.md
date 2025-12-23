@@ -6,7 +6,7 @@ We created a set of command line utilities to help troubleshooting the performan
 
 ## Windows:
 - **Performance problems:**
-  - Download the [latest release](https://github.com/hydrasdr/rfone_host/releases) of the tools package
+  - Download the [latest release](https://github.com/hydrasdr/hydrasdr-host/releases) of the tools package
   - Open a console (cmd.exe) and run `hydrasdr_rx -r NUL -t 0`
   - Leave it running for 30 seconds, then Ctrl+C
   If the average throughput is bellow 10.0 MSPS then either your USB controller has problems or you CPU can’t process the data.
@@ -20,14 +20,14 @@ We created a set of command line utilities to help troubleshooting the performan
 ## Linux (Debian/Ubuntu):
 Ubuntu users: 22.04 / 24.04 LTS is highly recommended.
 - **Building HydraSDR RFOne, gr-osmosdr and gqrx:**
-    1. Download the [hydrasdr_rfone_host_git](https://github.com/hydrasdr/rfone_host) repository, compile it, install it
+    1. Download the [hydrasdr_host_git](https://github.com/hydrasdr/hydrasdr-host) repository, compile it, install it
     1. Download the [gr-osmosdr hydrasdr fork](https://github.com/hydrasdr/gr-osmosdr) repository, compile it, install it
     1. Download the [gqrx](https://github.com/csete/gqrx.git) repository, compile it, install it
     1. Get pulseaudio using standard Arch way
     1. Configure pulseaudio (add user and group, such things)
 
 - **Performance problems:**
-  - Build the host tools following "How to build the host software on Linux:" https://github.com/hydrasdr/rfone_host
+  - Build the host tools following "How to build the host software on Linux:" https://github.com/hydrasdr/hydrasdr-host
   - Open a shell and run `hydrasdr_rx -r /dev/null -t 0`
   - Leave it running for 30 seconds, then Ctrl+C
   If the average throughput is bellow 10.0 MSPS then either your USB controller has problems or you CPU can’t process the data.
