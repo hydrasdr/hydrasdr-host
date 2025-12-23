@@ -1,4 +1,4 @@
-HydraSDR RFOne
+HydraSDR Software Defined Radio
 ==============
 
 A tiny, efficient and ultra evolutive software defined radio.
