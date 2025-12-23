@@ -1,4 +1,4 @@
-HydraSDR Software Defined Radio
+HydraSDR Software Defined Radio Host Tools + Shared Lib / DLL (Windows GNU/Linux MacOS) 
 ==============
 
 A tiny, efficient and ultra evolutive software defined radio.
