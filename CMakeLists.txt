@@ -72,8 +72,16 @@ if(MSVC)
     message(STATUS "  Library: ${LIBUSB_LIBRARIES}")
 
     set(LIBUSB_LIBRARY "${LIBUSB_LIBRARIES}" CACHE FILEPATH "libusb import library" FORCE)
-    get_filename_component(_libusb_lib_dir "${LIBUSB_LIBRARIES}" DIRECTORY)
-    set(LIBUSB_DLL "${_libusb_lib_dir}/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+    if(NOT LIBUSB_DLL)
+      get_filename_component(_libusb_lib_dir "${LIBUSB_LIBRARIES}" DIRECTORY)
+      # Check same directory as .lib first, then sibling bin/ directory
+      if(EXISTS "${_libusb_lib_dir}/libusb-1.0.dll")
+        set(LIBUSB_DLL "${_libusb_lib_dir}/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+      else()
+        get_filename_component(_libusb_parent_dir "${_libusb_lib_dir}" DIRECTORY)
+        set(LIBUSB_DLL "${_libusb_parent_dir}/bin/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+      endif()
+    endif()
 
     add_library(LIBUSB::LIBUSB SHARED IMPORTED GLOBAL)
     set_target_properties(LIBUSB::LIBUSB PROPERTIES

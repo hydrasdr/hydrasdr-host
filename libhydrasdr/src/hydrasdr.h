@@ -664,7 +664,7 @@ typedef struct
 	uint32_t current_samplerate;        /**< Currently selected effective sample rate in Hz (0 if not set) */
 	uint32_t current_hw_samplerate;     /**< Actual hardware/ADC sample rate in Hz (may differ from effective when decimating) */
 	uint32_t current_sample_type;       /**< Current sample type (enum hydrasdr_sample_type) */
-	uint32_t config_state_reserved2;    /**< Reserved for 64-bit alignment (32 bytes total) */
+	uint32_t config_state_reserved2[2]; /**< Reserved for 64-bit alignment (32 bytes total) */
 
 	/* Reserved for future expansion (maintain 64bits alignment and total size 4096 bytes) */
 	uint64_t reserved[189]; /**< Reserved bytes for future extensions */
