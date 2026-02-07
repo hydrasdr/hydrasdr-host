@@ -189,10 +189,13 @@ function(libhydrasdr_common_settings libtarget)
       message(STATUS "ARM64 detected: enabling native CPU optimizations")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "armv7|armv6|arm")
       # ARM32 (RPi3 in 32-bit mode): Enable NEON/VFP if available
-      target_compile_options(${libtarget} PRIVATE
-        $<$<CONFIG:Release>:-mfpu=neon-vfpv4>      # Enable NEON
-        $<$<CONFIG:Release>:-mfloat-abi=hard>      # Use hardware FP
-      )
+      # Android NDK only supports softfp, skip hard float ABI
+      if(NOT ANDROID)
+        target_compile_options(${libtarget} PRIVATE
+          $<$<CONFIG:Release>:-mfpu=neon-vfpv4>      # Enable NEON
+          $<$<CONFIG:Release>:-mfloat-abi=hard>      # Use hardware FP
+        )
+      endif()
       message(STATUS "ARM32 detected: enabling NEON/VFPv4 optimizations")
     endif()
 
