@@ -1,10 +1,10 @@
-hydrasdr-host-tools (1.0.3-1) unstable; urgency=medium
+hydrasdr-host (1.1.0-0) unstable; urgency=medium
 
-  * New upstream version
+  * New upstream master
 
- -- Daniel Ekman <knegge@gmail.com>  Sun, 07 Dec 2025 14:41:58 +0000
+ -- Daniel Ekman <knegge@gmail.com>  Mon, 05 Jan 2026 12:58:39 +0100
 
-hydrasdr-host-tools (1.0.2-1) unstable; urgency=medium
+hydrasdr-host (1.0.4-1) unstable; urgency=medium
 
   * Initial release.
 

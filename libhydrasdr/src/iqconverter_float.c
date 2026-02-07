@@ -41,10 +41,8 @@ THE SOFTWARE.
   #define _inline inline
   #define FIR_STANDARD
 #elif defined(__FreeBSD__)
-  #if defined(__x86_64__) || defined(__i386__)
-    #define USE_SSE2
-    #include <immintrin.h>
-  #endif
+  #define USE_SSE2
+#include <immintrin.h>
   #define _inline inline
   #define _aligned_free(mem) free(mem)
 void *_aligned_malloc(size_t size, size_t alignment)

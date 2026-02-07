@@ -23,14 +23,16 @@ BEGIN
     BLOCK "040904E4"
     //language ID = U.S. English, char set = Windows, Multilingual
     BEGIN
-      VALUE "FileDescription",	"HydraSDR library\0"
-      VALUE "FileVersion",	HYDRASDR_VERSION "\0"
-      VALUE "InternalName",	"hydrasdr.dll\0"
-      VALUE "LegalCopyright",	"(C) 2025 HydraSDR\0"
-      VALUE "OriginalFilename",	"hydrasdr.dll\0"
-      VALUE "ProductName",	"hydrasdr\0"
-      VALUE "ProductVersion",	HYDRASDR_VERSION "\0"
-      VALUE "Comments",		"For more information visit https://www.hydrasdr.com\0"
+      VALUE "CompanyName",      "Benjamin Vernoux\0"
+      VALUE "FileDescription",  "HydraSDR Software Defined Radio Library\0"
+      VALUE "FileVersion",      HYDRASDR_VERSION "\0"
+      VALUE "InternalName",     "hydrasdr.dll\0"
+      VALUE "LegalCopyright",   "(C) 2025-2026 Benjamin Vernoux\0"
+      VALUE "LegalTrademarks",  "HydraSDR\0"
+      VALUE "OriginalFilename", "hydrasdr.dll\0"
+      VALUE "ProductName",      "HydraSDR\0"
+      VALUE "ProductVersion",   HYDRASDR_VERSION "\0"
+      VALUE "Comments",         "https://www.hydrasdr.com\0"
     END
   END
   BLOCK "VarFileInfo"

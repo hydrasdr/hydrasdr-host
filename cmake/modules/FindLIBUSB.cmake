@@ -9,6 +9,7 @@
 # Copyright (c) 2006, 2008  Laurent Montel, <montel@kde.org>
 # Copyright (c) 2023 Jamie Smith <jsmith@crackofdawn.onmicrosoft.com>
 # Copyright (c) 2025 A.  Maitland Bottoms <bottoms@debian.org>
+# Copyright (c) 2026 Benjamin Vernoux <bvernoux@hydrasdr.com>
 #
 # Redistribution and use is allowed according to the terms of the BSD license.
 # For details see the accompanying COPYING-CMAKE-SCRIPTS file.
@@ -19,12 +20,13 @@ if(LIBUSB_INCLUDE_DIR AND LIBUSB_LIBRARIES)
   set(LIBUSB_FOUND TRUE)
 
 else(LIBUSB_INCLUDE_DIR AND LIBUSB_LIBRARIES)
-  if(NOT WIN32)
+  if(NOT WIN32 OR MINGW)
     # use pkg-config to get the directories and then use these values in the
     # FIND_PATH() and FIND_LIBRARY() calls
+    # Note: MINGW has pkg-config available, so we use it even on Windows
     find_package(PkgConfig)
     pkg_check_modules(PC_LIBUSB libusb-1.0)
-  endif(NOT WIN32)
+  endif(NOT WIN32 OR MINGW)
 
   set(LIBUSB_LIBRARY_NAME usb-1.0)
   if(${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")

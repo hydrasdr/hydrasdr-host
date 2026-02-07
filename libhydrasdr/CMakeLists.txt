@@ -1,5 +1,5 @@
 # Copyright 2012 Jared Boone
-# Copyright 2013-2025 Benjamin Vernoux
+# Copyright 2013-2026 Benjamin Vernoux
 #
 # This file is part of HydraSDR (based on HackRF project).
 #
@@ -75,8 +75,17 @@ else()
   endif(${BIGENDIAN})
 endif()
 
-find_package(LIBUSB REQUIRED)
-find_package(Threads REQUIRED)
+# Find dependencies
+# Note: For MSVC builds, these are pre-configured by top-level CMakeLists.txt via FetchContent
+if(NOT TARGET LIBUSB::LIBUSB)
+  find_package(LIBUSB REQUIRED)
+endif()
+
+# For MSVC with FetchContent, pthreads is handled via pthreads4w_static target
+# For other platforms, use standard Threads package
+if(NOT (MSVC AND TARGET pthreads4w_static))
+  find_package(Threads REQUIRED)
+endif()
 
 add_subdirectory(src)
 
@@ -94,42 +103,45 @@ set_target_properties(hydrasdr PROPERTIES
 
 ########################################################################
 # Create Cmake Config-file package interface
+# (Skip for MSVC FetchContent builds which are self-contained)
 ########################################################################
-include(CMakePackageConfigHelpers)
-write_basic_package_version_file(
-  "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRConfigVersion.cmake"
-  VERSION ${VERSION_STRING}
-  COMPATIBILITY AnyNewerVersion
-)
-
-export(EXPORT HydraSDRTargets
-  FILE "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRTargets.cmake"
-  NAMESPACE HydraSDR::
-)
-configure_file(HydraSDRConfig.cmake
-  "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRConfig.cmake"
-  COPYONLY
-)
-
-set(CONFIG_PACKAGE_LOCATION ${CMAKE_INSTALL_LIBDIR}/cmake/HydraSDR)
-install(EXPORT HydraSDRTargets
-  FILE
-    HydraSDRTargets.cmake
-  NAMESPACE
-    HydraSDR::
-  DESTINATION
-    ${CONFIG_PACKAGE_LOCATION}
-)
-install(
-  FILES
-    HydraSDRConfig.cmake
-    ../cmake/modules/FindLIBUSB.cmake
+if(NOT (MSVC AND TARGET pthreads4w_static))
+  include(CMakePackageConfigHelpers)
+  write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRConfigVersion.cmake"
-  DESTINATION
-    ${CONFIG_PACKAGE_LOCATION}
-  COMPONENT
-    Devel
-)
+    VERSION ${VERSION_STRING}
+    COMPATIBILITY AnyNewerVersion
+  )
+
+  export(EXPORT HydraSDRTargets
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRTargets.cmake"
+    NAMESPACE HydraSDR::
+  )
+  configure_file(HydraSDRConfig.cmake
+    "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRConfig.cmake"
+    COPYONLY
+  )
+
+  set(CONFIG_PACKAGE_LOCATION ${CMAKE_INSTALL_LIBDIR}/cmake/HydraSDR)
+  install(EXPORT HydraSDRTargets
+    FILE
+      HydraSDRTargets.cmake
+    NAMESPACE
+      HydraSDR::
+    DESTINATION
+      ${CONFIG_PACKAGE_LOCATION}
+  )
+  install(
+    FILES
+      HydraSDRConfig.cmake
+      ../cmake/modules/FindLIBUSB.cmake
+      "${CMAKE_CURRENT_BINARY_DIR}/HydraSDR/HydraSDRConfigVersion.cmake"
+    DESTINATION
+      ${CONFIG_PACKAGE_LOCATION}
+    COMPONENT
+      Devel
+  )
+endif()
 
 ########################################################################
 # Create Pkg Config File
@@ -166,7 +178,7 @@ INSTALL(
 ########################################################################
 # Create uninstall target
 ########################################################################
-if(NOT hydrasdr_all_SOURCE_DIR)
+if(NOT hydrasdr-host_SOURCE_DIR)
 configure_file(
   ${PROJECT_SOURCE_DIR}/../cmake/cmake_uninstall.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake

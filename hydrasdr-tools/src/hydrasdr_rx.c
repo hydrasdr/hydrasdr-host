@@ -1,6 +1,6 @@
 /*
  * Copyright 2012 Jared Boone <jared@sharebrained.com>
- * Copyright 2014-2025 Benjamin Vernoux <bvernoux@hydrasdr.com>
+ * Copyright 2014-2026 Benjamin Vernoux <bvernoux@hydrasdr.com>
  *
  * This file is part of HydraSDR (based on HackRF project).
  *
@@ -34,7 +34,7 @@
 #include <errno.h>
 #include <limits.h>
 
-#define HYDRASDR_RX_VERSION "1.0.0 2025"
+#define HYDRASDR_RX_VERSION "1.1.0 2025-2026"
 
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
 #ifndef bool
@@ -100,26 +100,12 @@ int gettimeofday(struct timeval *tv, void* ignored)
 
 #define FREQ_ONE_MHZ (1000000ull)
 
-#define DEFAULT_FREQ_HZ (900000000ull) /* 900MHz */
-
-#define DEFAULT_VGA_IF_GAIN (5)
-#define DEFAULT_LNA_GAIN (1)
-#define DEFAULT_MIXER_GAIN (5)
-
 #define PACKING_MAX (0xffffffff)
-
-#define FREQ_HZ_MIN (24000000ull) /* 24MHz */
-#define FREQ_HZ_MAX (1850000000ull) /* 1850MHz (officially 1800MHz) */
 #define SAMPLE_TYPE_MAX (HYDRASDR_SAMPLE_END-1)
 #define BIAST_MAX (1)
-#define VGA_GAIN_MAX (15)
-#define MIXER_GAIN_MAX (15)
-#define LNA_GAIN_MAX (14)
-#define LINEARITY_GAIN_MAX (21)
-#define SENSITIVITY_GAIN_MAX (21)
 #define SAMPLES_TO_XFER_MAX_U64 (0x8000000000000000ull) /* Max value */
 
-#define MIN_SAMPLERATE_BY_VALUE (1000000ul)
+#define MIN_SAMPLERATE_BY_VALUE (100000ul)
 
 /* WAVE or RIFF WAVE file format containing data for HydraSDR compatible with SDR++ Wav IQ file */
 typedef struct 
@@ -195,15 +181,25 @@ t_u64toa ascii_u64_data3;
 
 hydrasdr_receiver_mode_t receiver_mode = HYDRASDR_RECEIVER_MODE_RX;
 
-uint32_t vga_gain = DEFAULT_VGA_IF_GAIN;
-uint32_t lna_gain = DEFAULT_LNA_GAIN;
-uint32_t mixer_gain = DEFAULT_MIXER_GAIN;
+/* Gain values (initialized to 0, will use device defaults from device_info API) */
+uint32_t vga_gain = 0;
+uint32_t lna_gain = 0;
+uint32_t mixer_gain = 0;
+uint32_t rf_gain = 0;
+uint32_t filter_gain = 0;
 
 uint32_t linearity_gain_val;
 bool linearity_gain = false;
 
 uint32_t sensitivity_gain_val;
 bool sensitivity_gain = false;
+
+/* Flags for which gains were explicitly set by user */
+bool vga_gain_set = false;
+bool lna_gain_set = false;
+bool mixer_gain_set = false;
+bool rf_gain_set = false;
+bool filter_gain_set = false;
 
 /* WAV default values */
 uint16_t wav_format_tag=1; /* PCM8 or PCM16 */
@@ -212,7 +208,15 @@ uint32_t wav_sample_per_sec;
 uint16_t wav_nb_byte_per_sample=2;
 uint16_t wav_nb_bits_per_sample=16;
 
-hydrasdr_read_partid_serialno_t read_partid_serialno;
+/* Device info for capability-based gain validation */
+hydrasdr_device_info_t device_info;
+
+/* Temperature statistics */
+float temp_min_celsius = 1000.0f;
+float temp_max_celsius = -1000.0f;
+uint32_t temp_sample_count = 0;
+time_t temp_min_time = 0;
+time_t temp_max_time = 0;
 
 volatile bool do_exit = false;
 
@@ -243,7 +247,7 @@ bool call_set_packing = false;
 uint32_t packing_val = 0;
 
 bool sample_rate = false;
-uint32_t sample_rate_val;
+uint32_t sample_rate_val = 0;  /* Default to index 0 (first supported rate) */
 
 bool sample_type = false;
 enum hydrasdr_sample_type sample_type_val;
@@ -251,13 +255,76 @@ enum hydrasdr_sample_type sample_type_val;
 bool biast = false;
 uint32_t biast_val;
 
+bool rf_port = false;
+uint32_t rf_port_val = 0;
+
+bool bandwidth = false;
+uint32_t bandwidth_val = 0;
+
+bool decimation_mode = false;
+uint32_t decimation_mode_val = 0;
+
 bool serial_number = false;
 uint64_t serial_number_val;
+
+/* Dropped samples tracking - thread-safe 64-bit counter */
+volatile uint64_t total_dropped_samples = 0;
+
+/* Cross-platform atomic helpers for 64-bit counters */
+#if defined(_MSC_VER)
+  #define ATOMIC_ADD64(ptr, val) InterlockedExchangeAdd64((volatile LONG64*)(ptr), (LONG64)(val))
+#elif defined(__GNUC__) || defined(__clang__)
+  #define ATOMIC_ADD64(ptr, val) __atomic_fetch_add((ptr), (val), __ATOMIC_RELAXED)
+#else
+  #define ATOMIC_ADD64(ptr, val) (*(ptr) += (val))
+#endif
 
 static float
 TimevalDiff(const struct timeval *a, const struct timeval *b)
 {
 	return (a->tv_sec - b->tv_sec) + 1e-6f * (a->tv_usec - b->tv_usec);
+}
+
+/**
+ * @brief Helper to calculate bytes per sample based on API enum.
+ * @param type The hydrasdr_sample_type enum from the transfer struct.
+ * @return Number of bytes per single sample (I+Q combined if applicable).
+ */
+static inline size_t bytes_per_sample(enum hydrasdr_sample_type type)
+{
+	switch (type) {
+		case HYDRASDR_SAMPLE_FLOAT32_IQ:   return 8; /* 4 bytes I + 4 bytes Q */
+		case HYDRASDR_SAMPLE_FLOAT32_REAL: return 4;
+		case HYDRASDR_SAMPLE_INT16_IQ:     return 4; /* 2 bytes I + 2 bytes Q */
+		case HYDRASDR_SAMPLE_INT16_REAL:   return 2;
+		case HYDRASDR_SAMPLE_UINT16_REAL:  return 2;
+		case HYDRASDR_SAMPLE_RAW:          return 2; /* Raw device stream (or 1.5 if packed) */
+		case HYDRASDR_SAMPLE_INT8_IQ:      return 2; /* 1 byte I + 1 byte Q */
+		case HYDRASDR_SAMPLE_UINT8_IQ:     return 2; /* 1 byte I + 1 byte Q */
+		case HYDRASDR_SAMPLE_INT8_REAL:    return 1;
+		case HYDRASDR_SAMPLE_UINT8_REAL:   return 1;
+		default:                           return 2;
+	}
+}
+
+/**
+ * @brief Get sample type name string
+ */
+static const char* sample_type_name(enum hydrasdr_sample_type type)
+{
+	switch (type) {
+		case HYDRASDR_SAMPLE_FLOAT32_IQ:   return "FLOAT32_IQ";
+		case HYDRASDR_SAMPLE_FLOAT32_REAL: return "FLOAT32_REAL";
+		case HYDRASDR_SAMPLE_INT16_IQ:     return "INT16_IQ";
+		case HYDRASDR_SAMPLE_INT16_REAL:   return "INT16_REAL";
+		case HYDRASDR_SAMPLE_UINT16_REAL:  return "UINT16_REAL";
+		case HYDRASDR_SAMPLE_RAW:          return "RAW";
+		case HYDRASDR_SAMPLE_INT8_IQ:      return "INT8_IQ";
+		case HYDRASDR_SAMPLE_UINT8_IQ:     return "UINT8_IQ";
+		case HYDRASDR_SAMPLE_INT8_REAL:    return "INT8_REAL";
+		case HYDRASDR_SAMPLE_UINT8_REAL:   return "UINT8_REAL";
+		default:                           return "UNKNOWN";
+	}
 }
 
 int parse_u64(char* s, uint64_t* const value) {
@@ -362,115 +429,92 @@ char* u64toa(uint64_t val, t_u64toa* str)
 	return res;
 }
 
+/**
+ * @brief Asynchronous RX Callback Function.
+ *
+ * @details This function is invoked by the HydraSDR library thread.
+ * Critical Section: Execution time must be minimized.
+ * Uses transfer->sample_type for dynamic bytes calculation.
+ *
+ * @param transfer Pointer to the transfer structure containing data and metadata.
+ * @return int 0 to continue streaming, non-zero to request stop.
+ */
 int rx_callback(hydrasdr_transfer_t* transfer)
 {
-	uint32_t bytes_to_write;
-	void* pt_rx_buffer;
-	ssize_t bytes_written;
+	size_t bytes_to_write;
+	size_t bytes_written;
 	struct timeval time_now;
 	float time_difference, rate;
 
-	if( fd != NULL ) 
-	{
-		switch(sample_type_val)
-		{
-			case HYDRASDR_SAMPLE_FLOAT32_IQ:
-				bytes_to_write = transfer->sample_count * FLOAT32_EL_SIZE_BYTE * 2;
-				pt_rx_buffer = transfer->samples;
-				break;
-
-			case HYDRASDR_SAMPLE_FLOAT32_REAL:
-				bytes_to_write = transfer->sample_count * FLOAT32_EL_SIZE_BYTE * 1;
-				pt_rx_buffer = transfer->samples;
-				break;
-
-			case HYDRASDR_SAMPLE_INT16_IQ:
-				bytes_to_write = transfer->sample_count * INT16_EL_SIZE_BYTE * 2;
-				pt_rx_buffer = transfer->samples;
-				break;
-
-			case HYDRASDR_SAMPLE_INT16_REAL:
-				bytes_to_write = transfer->sample_count * INT16_EL_SIZE_BYTE * 1;
-				pt_rx_buffer = transfer->samples;
-				break;
-
-			case HYDRASDR_SAMPLE_UINT16_REAL:
-				bytes_to_write = transfer->sample_count * INT16_EL_SIZE_BYTE * 1;
-				pt_rx_buffer = transfer->samples;
-				break;
-
-			case HYDRASDR_SAMPLE_RAW:
-				if (packing_val)
-				{
-					bytes_to_write = transfer->sample_count * INT12_EL_SIZE_BITS / INT8_EL_SIZE_BITS;
-				}
-				else
-				{
-					bytes_to_write = transfer->sample_count * INT16_EL_SIZE_BYTE * 1;
-				}
-				pt_rx_buffer = transfer->samples;
-				break;
-
-			default:
-				bytes_to_write = 0;
-				pt_rx_buffer = NULL;
-			break;
-		}
-
-		gettimeofday(&time_now, NULL);
-
-		if (!got_first_packet)
-		{
-			t_start = time_now;
-			time_start = time_now;
-			got_first_packet = true;
-		}
-		else
-		{
-			buffer_count++;
-			sample_count += transfer->sample_count;
-			if (buffer_count == 50)
-			{
-				time_difference = TimevalDiff(&time_now, &time_start);
-				rate = (float) sample_count / time_difference;
-				average_rate += 0.2f * (rate - average_rate);
-				global_average_rate += average_rate;
-				rate_samples++;
-				time_start = time_now;
-				sample_count = 0;
-				buffer_count = 0;
-			}
-		}
-
-		if (limit_num_samples) {
-			if (bytes_to_write >= bytes_to_xfer) {
-				bytes_to_write = (int)bytes_to_xfer;
-			}
-			bytes_to_xfer -= bytes_to_write;
-		}
-
-		if(pt_rx_buffer != NULL)
-		{
-			bytes_written = fwrite(pt_rx_buffer, 1, bytes_to_write, fd);
-		}else
-		{
-			bytes_written = 0;
-		}
-		if ( (bytes_written != bytes_to_write) || 
-				 ((limit_num_samples == true) && (bytes_to_xfer == 0)) 
-				)
-			return -1;
-		else
-			return 0;
-	}else
-	{
+	if (do_exit)
 		return -1;
+
+	/* Track dropped samples */
+	if (transfer->dropped_samples)
+		ATOMIC_ADD64(&total_dropped_samples, transfer->dropped_samples);
+
+	if (fd == NULL)
+		return -1;
+
+	/* Calculate bytes using transfer's sample_type (hardware-agnostic) */
+	const size_t bps = bytes_per_sample(transfer->sample_type);
+
+	/* Handle RAW mode with packing (12-bit packed) */
+	if (transfer->sample_type == HYDRASDR_SAMPLE_RAW && packing_val) {
+		bytes_to_write = (size_t)transfer->sample_count * INT12_EL_SIZE_BITS / INT8_EL_SIZE_BITS;
+	} else {
+		bytes_to_write = (size_t)transfer->sample_count * bps;
 	}
+
+	/* Update timing statistics */
+	gettimeofday(&time_now, NULL);
+
+	if (!got_first_packet) {
+		t_start = time_now;
+		time_start = time_now;
+		got_first_packet = true;
+	} else {
+		buffer_count++;
+		sample_count += transfer->sample_count;
+		if (buffer_count == 50) {
+			time_difference = TimevalDiff(&time_now, &time_start);
+			rate = (float) sample_count / time_difference;
+			average_rate += 0.2f * (rate - average_rate);
+			global_average_rate += average_rate;
+			rate_samples++;
+			time_start = time_now;
+			sample_count = 0;
+			buffer_count = 0;
+		}
+	}
+
+	/* Handle sample limit */
+	if (limit_num_samples) {
+		if (bytes_to_write >= bytes_to_xfer) {
+			bytes_to_write = (size_t)bytes_to_xfer;
+		}
+		bytes_to_xfer -= bytes_to_write;
+	}
+
+	/* Write samples to file */
+	if (bytes_to_write > 0 && transfer->samples != NULL) {
+		bytes_written = fwrite(transfer->samples, 1, bytes_to_write, fd);
+		if (bytes_written != bytes_to_write) {
+			fprintf(stderr, "Disk write error\n");
+			return -1;
+		}
+	}
+
+	/* Check if transfer complete */
+	if (limit_num_samples && bytes_to_xfer == 0)
+		return -1;
+
+	return 0;
 }
 
-static void usage(void)
+/* Static usage for when device is not open yet */
+static void usage_static(void)
 {
-	fprintf(stderr, "hydrasdr_rx v%s\n", HYDRASDR_RX_VERSION);
 	fprintf(stderr, "Usage:\n");
 	fprintf(stderr, "-r <filename>: Receive data into file\n");
 	fprintf(stderr, "-w Receive data into file with WAV header and automatic name\n");
@@ -478,20 +522,111 @@ static void usage(void)
 	fprintf(stderr, "[-s serial_number_64bits]: Open device with specified 64bits serial number\n");
 	fprintf(stderr, "[-p packing]: Set packing for samples, \n");
 	fprintf(stderr, " 1=enabled(12bits packed), 0=disabled(default 16bits not packed)\n");
-	fprintf(stderr, "[-f frequency_MHz]: Set frequency in MHz between [%s, %s] (default %sMHz)\n",
-		u64toa((FREQ_HZ_MIN / FREQ_ONE_MHZ), &ascii_u64_data1),
-		u64toa((FREQ_HZ_MAX / FREQ_ONE_MHZ), &ascii_u64_data2),
-		u64toa((DEFAULT_FREQ_HZ / FREQ_ONE_MHZ), &ascii_u64_data3));
+	fprintf(stderr, "[-f frequency_MHz]: Set frequency in MHz (device-specific range)\n");
 	fprintf(stderr, "[-a sample_rate]: Set sample rate\n");
-	fprintf(stderr, "[-t sample_type]: Set sample type, \n");
-	fprintf(stderr, " 0=FLOAT32_IQ, 1=FLOAT32_REAL, 2=INT16_IQ(default), 3=INT16_REAL, 4=U16_REAL, 5=RAW\n");
+	fprintf(stderr, "[-B bandwidth]: Set bandwidth (if supported by device)\n");
+	fprintf(stderr, "[-t sample_type]: Set sample type (device-specific supported types)\n");
+	fprintf(stderr, "[-P rf_port]: Set RF port (0=first port, device-specific)\n");
 	fprintf(stderr, "[-b biast]: Set Bias Tee, 1=enabled, 0=disabled(default)\n");
-	fprintf(stderr, "[-v vga_gain]: Set VGA/IF gain, 0-%d (default %d)\n", VGA_GAIN_MAX, vga_gain);
-	fprintf(stderr, "[-m mixer_gain]: Set Mixer gain, 0-%d (default %d)\n", MIXER_GAIN_MAX, mixer_gain);
-	fprintf(stderr, "[-l lna_gain]: Set LNA gain, 0-%d (default %d)\n", LNA_GAIN_MAX, lna_gain);
-	fprintf(stderr, "[-g linearity_gain]: Set linearity simplified gain, 0-%d\n", LINEARITY_GAIN_MAX);
-	fprintf(stderr, "[-h sensivity_gain]: Set sensitivity simplified gain, 0-%d\n", SENSITIVITY_GAIN_MAX);
+	fprintf(stderr, "Gain options (availability and ranges depend on device):\n");
+	fprintf(stderr, "[-v vga_gain]: Set VGA/IF gain\n");
+	fprintf(stderr, "[-l lna_gain]: Set LNA gain\n");
+	fprintf(stderr, "[-m mixer_gain]: Set Mixer gain\n");
+	fprintf(stderr, "[-R rf_gain]: Set RF gain\n");
+	fprintf(stderr, "[-F filter_gain]: Set Filter gain\n");
+	fprintf(stderr, "[-g linearity_gain]: Set linearity simplified gain\n");
+	fprintf(stderr, "[-i sensitivity_gain]: Set sensitivity simplified gain\n");
+	fprintf(stderr, "[-D decimation_mode]: Set decimation mode: 0=Low Bandwidth (default), 1=High Definition\n");
+	fprintf(stderr, "   High Definition uses highest HW sample rate with decimation\n");
 	fprintf(stderr, "[-n num_samples]: Number of samples to transfer (default is unlimited)\n");
+	fprintf(stderr, "[-d]: Verbose mode\n");
+	fprintf(stderr, "\nNote: Connect device to see device-specific options, sample types, and RF ports.\n");
+}
+
+/* Dynamic usage showing device-specific capabilities and ranges */
+static void usage_dynamic(const hydrasdr_device_info_t *info)
+{
+	uint8_t i;
+
+	fprintf(stderr, "Device: %s\n\n", info->board_name);
+	fprintf(stderr, "Usage:\n");
+	fprintf(stderr, "-r <filename>: Receive data into file\n");
+	fprintf(stderr, "-w Receive data into file with WAV header and automatic name\n");
+	fprintf(stderr, " This is for SDR++ compatibility and may not work with other software\n");
+	fprintf(stderr, "[-s serial_number_64bits]: Open device with specified 64bits serial number\n");
+	fprintf(stderr, "[-p packing]: Set packing for samples, \n");
+	fprintf(stderr, " 1=enabled(12bits packed), 0=disabled(default 16bits not packed)\n");
+	fprintf(stderr, "[-f frequency_MHz]: Set frequency in MHz between [%.1f, %.1f]\n",
+		(double)info->min_frequency / 1e6,
+		(double)info->max_frequency / 1e6);
+	fprintf(stderr, "[-a sample_rate]: Set sample rate\n");
+
+	/* Display bandwidth option if supported */
+	if (info->features & HYDRASDR_CAP_BANDWIDTH) {
+		fprintf(stderr, "[-B bandwidth]: Set bandwidth (device supports bandwidth control)\n");
+	}
+
+	/* Display supported sample types from device_info */
+	fprintf(stderr, "[-t sample_type]: Set sample type. Supported types:\n");
+	for (i = 0; i < HYDRASDR_SAMPLE_END; i++) {
+		if (info->sample_types & (1 << i)) {
+			fprintf(stderr, "   %d=%s%s\n", i, sample_type_name((enum hydrasdr_sample_type)i),
+				(i == HYDRASDR_SAMPLE_INT16_IQ) ? " (default)" : "");
+		}
+	}
+
+	/* Display RF ports if supported */
+	if ((info->features & HYDRASDR_CAP_RF_PORT_SELECT) && info->rf_port_count > 0) {
+		fprintf(stderr, "[-P rf_port]: Set RF port (0-%d). Available ports:\n", info->rf_port_count - 1);
+		for (i = 0; i < info->rf_port_count; i++) {
+			fprintf(stderr, "   %d=%s [%.1f-%.1f MHz]%s\n", i,
+				info->rf_port_info[i].name,
+				(double)info->rf_port_info[i].min_frequency / 1e6,
+				(double)info->rf_port_info[i].max_frequency / 1e6,
+				info->rf_port_info[i].has_bias_tee ? " (bias-tee)" : "");
+		}
+	}
+
+	if (info->features & HYDRASDR_CAP_BIAS_TEE) {
+		fprintf(stderr, "[-b biast]: Set Bias Tee, 1=enabled, 0=disabled(default)\n");
+	}
+
+	fprintf(stderr, "\nGain options for %s:\n", info->board_name);
+
+	if (info->features & HYDRASDR_CAP_VGA_GAIN) {
+		fprintf(stderr, "[-v vga_gain]: Set VGA/IF gain, %d-%d (default %d)\n",
+			(int)info->vga_gain.min_value, (int)info->vga_gain.max_value, (int)info->vga_gain.default_value);
+	}
+	if (info->features & HYDRASDR_CAP_LNA_GAIN) {
+		fprintf(stderr, "[-l lna_gain]: Set LNA gain, %d-%d (default %d)\n",
+			(int)info->lna_gain.min_value, (int)info->lna_gain.max_value, (int)info->lna_gain.default_value);
+	}
+	if (info->features & HYDRASDR_CAP_MIXER_GAIN) {
+		fprintf(stderr, "[-m mixer_gain]: Set Mixer gain, %d-%d (default %d)\n",
+			(int)info->mixer_gain.min_value, (int)info->mixer_gain.max_value, (int)info->mixer_gain.default_value);
+	}
+	if (info->features & HYDRASDR_CAP_RF_GAIN) {
+		fprintf(stderr, "[-R rf_gain]: Set RF gain, %d-%d (default %d)\n",
+			(int)info->rf_gain.min_value, (int)info->rf_gain.max_value, (int)info->rf_gain.default_value);
+	}
+	if (info->features & HYDRASDR_CAP_FILTER_GAIN) {
+		fprintf(stderr, "[-F filter_gain]: Set Filter gain, %d-%d (default %d)\n",
+			(int)info->filter_gain.min_value, (int)info->filter_gain.max_value, (int)info->filter_gain.default_value);
+	}
+	if (info->features & HYDRASDR_CAP_LINEARITY_GAIN) {
+		fprintf(stderr, "[-g linearity_gain]: Set linearity simplified gain, %d-%d (default %d)\n",
+			(int)info->linearity_gain.min_value, (int)info->linearity_gain.max_value, (int)info->linearity_gain.default_value);
+	}
+	if (info->features & HYDRASDR_CAP_SENSITIVITY_GAIN) {
+		fprintf(stderr, "[-i sensitivity_gain]: Set sensitivity simplified gain, %d-%d (default %d)\n",
+			(int)info->sensitivity_gain.min_value, (int)info->sensitivity_gain.max_value, (int)info->sensitivity_gain.default_value);
+	}
+
+	/* Decimation mode (v1.1.0+ API feature) */
+	fprintf(stderr, "[-D decimation_mode]: Set decimation mode: 0=Low Bandwidth (default), 1=High Definition\n");
+	fprintf(stderr, "   High Definition uses highest HW sample rate with decimation\n");
+
+	fprintf(stderr, "\n[-n num_samples]: Number of samples to transfer (default is unlimited)\n");
 	fprintf(stderr, "[-d]: Verbose mode\n");
 }
 
@@ -542,16 +677,96 @@ int main(int argc, char** argv)
 	uint32_t sample_type_u32;
 	double freq_hz_temp;
 	char str[20];
+	hydrasdr_lib_version_t lib_version;
+
+	/* Display library version and check compatibility */
+	hydrasdr_lib_version(&lib_version);
+	fprintf(stderr, "hydrasdr_rx v%s (libhydrasdr v%d.%d.%d)\n",
+	        HYDRASDR_RX_VERSION,
+	        lib_version.major_version, lib_version.minor_version, lib_version.revision);
+	{
+		uint32_t runtime_ver = HYDRASDR_MAKE_VERSION(lib_version.major_version,
+		                                              lib_version.minor_version,
+		                                              lib_version.revision);
+		uint32_t min_ver = HYDRASDR_MAKE_VERSION(1, 1, 0);
+		if (runtime_ver < min_ver) {
+			fprintf(stderr, "[WARN] Library version too old: need v1.1.0+\n");
+		}
+	}
 
 	/* Default sample type int16 IQ */
 	sample_type_val = HYDRASDR_SAMPLE_INT16_IQ;
-	strcpy(sample_type_str, "int16");
-	strcpy(channels_str, "IQ");
+	snprintf(sample_type_str, sizeof(sample_type_str), "int16");
+	snprintf(channels_str, sizeof(channels_str), "IQ");
 
-	while( (opt = getopt(argc, argv, "r:ws:p:f:a:t:b:v:m:l:g:h:n:d")) != EOF )
+	/* Show help if no arguments provided */
+	if (argc == 1) {
+		/* Try to connect to device and show device-specific options */
+		result = hydrasdr_open(&device);
+		if (result == HYDRASDR_SUCCESS) {
+			hydrasdr_device_info_t device_info;
+			result = hydrasdr_get_device_info(device, &device_info);
+			if (result == HYDRASDR_SUCCESS) {
+				usage_dynamic(&device_info);
+
+				/* Query and display supported sample rates */
+				count = 0;
+				result = hydrasdr_get_samplerates(device, &count, 0);
+				if (result == HYDRASDR_SUCCESS && count > 0) {
+					supported_samplerates = malloc(count * sizeof(uint32_t));
+					if (supported_samplerates) {
+						result = hydrasdr_get_samplerates(device, supported_samplerates, count);
+						if (result == HYDRASDR_SUCCESS) {
+							fprintf(stderr, "\nSupported sample rates (-a option):\n");
+							for (uint32_t i = 0; i < count; i++) {
+								if (supported_samplerates[i] >= 1000000) {
+									fprintf(stderr, "  %u = %.2f MHz\n", i,
+									        (double)supported_samplerates[i] / 1e6);
+								} else {
+									fprintf(stderr, "  %u = %u Hz\n", i, supported_samplerates[i]);
+								}
+							}
+						}
+						free(supported_samplerates);
+					}
+				}
+
+				/* Query and display supported bandwidths if supported */
+				if (device_info.features & HYDRASDR_CAP_BANDWIDTH) {
+					uint32_t bw_count = 0;
+					result = hydrasdr_get_bandwidths(device, &bw_count, 0);
+					if (result == HYDRASDR_SUCCESS && bw_count > 0) {
+						uint32_t *bandwidths = malloc(bw_count * sizeof(uint32_t));
+						if (bandwidths) {
+							result = hydrasdr_get_bandwidths(device, bandwidths, bw_count);
+							if (result == HYDRASDR_SUCCESS) {
+								fprintf(stderr, "\nSupported bandwidths (-B option):\n");
+								for (uint32_t i = 0; i < bw_count; i++) {
+									if (bandwidths[i] >= 1000000) {
+										fprintf(stderr, "  %u = %.2f MHz\n", i,
+										        (double)bandwidths[i] / 1e6);
+									} else {
+										fprintf(stderr, "  %u = %u Hz\n", i, bandwidths[i]);
+									}
+								}
+							}
+							free(bandwidths);
+						}
+					}
+				}
+			}
+			hydrasdr_close(device);
+		} else {
+			/* No device detected, show generic help */
+			usage_static();
+		}
+		return EXIT_SUCCESS;
+	}
+
+	while( (opt = getopt(argc, argv, "r:ws:p:f:a:B:t:P:b:v:m:l:R:F:g:i:D:n:d")) != EOF )
 	{
 		result = HYDRASDR_SUCCESS;
-		switch( opt ) 
+		switch( opt )
 		{
 			case 'r':
 				receive = true;
@@ -596,6 +811,11 @@ int main(int argc, char** argv)
 				result = parse_u32(optarg, &sample_rate_u32);
 			break;
 
+			case 'B': /* Bandwidth */
+				bandwidth = true;
+				result = parse_u32(optarg, &bandwidth_val);
+			break;
+
 			case 't': /* Sample type see also hydrasdr_sample_type */
 				result = parse_u32(optarg, &sample_type_u32);
 				switch (sample_type_u32)
@@ -606,8 +826,8 @@ int main(int argc, char** argv)
 						wav_nb_channels = 2;
 						wav_nb_bits_per_sample = 32;
 						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
-						strcpy(sample_type_str, "float32");
-						strcpy(channels_str, "IQ");
+						snprintf(sample_type_str, sizeof(sample_type_str), "float32");
+						snprintf(channels_str, sizeof(channels_str), "IQ");
 					break;
 
 					case 1:
@@ -616,8 +836,8 @@ int main(int argc, char** argv)
 						wav_nb_channels = 1;
 						wav_nb_bits_per_sample = 32;
 						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
-						strcpy(sample_type_str, "float32");
-						strcpy(channels_str, "REAL");
+						snprintf(sample_type_str, sizeof(sample_type_str), "float32");
+						snprintf(channels_str, sizeof(channels_str), "REAL");
 					break;
 
 					case 2:
@@ -626,8 +846,8 @@ int main(int argc, char** argv)
 						wav_nb_channels = 2;
 						wav_nb_bits_per_sample = 16;
 						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
-						strcpy(sample_type_str, "int16");
-						strcpy(channels_str, "IQ");
+						snprintf(sample_type_str, sizeof(sample_type_str), "int16");
+						snprintf(channels_str, sizeof(channels_str), "IQ");
 					break;
 
 					case 3:
@@ -636,8 +856,8 @@ int main(int argc, char** argv)
 						wav_nb_channels = 1;
 						wav_nb_bits_per_sample = 16;
 						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
-						strcpy(sample_type_str, "int16");
-						strcpy(channels_str, "REAL");
+						snprintf(sample_type_str, sizeof(sample_type_str), "int16");
+						snprintf(channels_str, sizeof(channels_str), "REAL");
 					break;
 
 					case 4:
@@ -646,16 +866,56 @@ int main(int argc, char** argv)
 						wav_nb_channels = 1;
 						wav_nb_bits_per_sample = 16;
 						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
-						strcpy(sample_type_str, "uint16");
-						strcpy(channels_str, "REAL");
+						snprintf(sample_type_str, sizeof(sample_type_str), "uint16");
+						snprintf(channels_str, sizeof(channels_str), "REAL");
 					break;
 
 					case 5:
 						sample_type_val = HYDRASDR_SAMPLE_RAW;
 						wav_nb_bits_per_sample = 12;
 						wav_nb_channels = 1;
-						strcpy(sample_type_str, "raw12");
-						strcpy(channels_str, "RAW");
+						snprintf(sample_type_str, sizeof(sample_type_str), "raw12");
+						snprintf(channels_str, sizeof(channels_str), "RAW");
+						break;
+
+					case 6:
+						sample_type_val = HYDRASDR_SAMPLE_INT8_IQ;
+						wav_format_tag = 1; /* PCM8 */
+						wav_nb_channels = 2;
+						wav_nb_bits_per_sample = 8;
+						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
+						snprintf(sample_type_str, sizeof(sample_type_str), "int8");
+						snprintf(channels_str, sizeof(channels_str), "IQ");
+						break;
+
+					case 7:
+						sample_type_val = HYDRASDR_SAMPLE_UINT8_IQ;
+						wav_format_tag = 1; /* PCM8 */
+						wav_nb_channels = 2;
+						wav_nb_bits_per_sample = 8;
+						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
+						snprintf(sample_type_str, sizeof(sample_type_str), "uint8");
+						snprintf(channels_str, sizeof(channels_str), "IQ");
+						break;
+
+					case 8:
+						sample_type_val = HYDRASDR_SAMPLE_INT8_REAL;
+						wav_format_tag = 1; /* PCM8 */
+						wav_nb_channels = 1;
+						wav_nb_bits_per_sample = 8;
+						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
+						snprintf(sample_type_str, sizeof(sample_type_str), "int8");
+						snprintf(channels_str, sizeof(channels_str), "REAL");
+						break;
+
+					case 9:
+						sample_type_val = HYDRASDR_SAMPLE_UINT8_REAL;
+						wav_format_tag = 1; /* PCM8 */
+						wav_nb_channels = 1;
+						wav_nb_bits_per_sample = 8;
+						wav_nb_byte_per_sample = (wav_nb_bits_per_sample / 8);
+						snprintf(sample_type_str, sizeof(sample_type_str), "uint8");
+						snprintf(channels_str, sizeof(channels_str), "REAL");
 						break;
 
 					default:
@@ -665,31 +925,58 @@ int main(int argc, char** argv)
 				}
 			break;
 
+			case 'P': /* RF port selection */
+				rf_port = true;
+				result = parse_u32(optarg, &rf_port_val);
+			break;
+
 			case 'b':
-				serial_number = true;
+				biast = true;
 				result = parse_u32(optarg, &biast_val);
 			break;
 
 			case 'v':
+				vga_gain_set = true;
 				result = parse_u32(optarg, &vga_gain);
 			break;
 
 			case 'm':
+				mixer_gain_set = true;
 				result = parse_u32(optarg, &mixer_gain);
 			break;
 
 			case 'l':
+				lna_gain_set = true;
 				result = parse_u32(optarg, &lna_gain);
+			break;
+
+			case 'R':
+				rf_gain_set = true;
+				result = parse_u32(optarg, &rf_gain);
+			break;
+
+			case 'F':
+				filter_gain_set = true;
+				result = parse_u32(optarg, &filter_gain);
 			break;
 
 			case 'g':
 				linearity_gain = true;
-				result = parse_u32(optarg, &linearity_gain_val);		
+				result = parse_u32(optarg, &linearity_gain_val);
 			break;
 
-			case 'h':
+			case 'i':
 				sensitivity_gain = true;
 				result = parse_u32(optarg, &sensitivity_gain_val);
+			break;
+
+			case 'D':
+				decimation_mode = true;
+				result = parse_u32(optarg, &decimation_mode_val);
+				if (result == HYDRASDR_SUCCESS && decimation_mode_val > 1) {
+					fprintf(stderr, "argument error: decimation_mode must be 0 or 1\n");
+					result = HYDRASDR_ERROR_INVALID_PARAM;
+				}
 			break;
 
 			case 'n':
@@ -703,13 +990,13 @@ int main(int argc, char** argv)
 
 			default:
 				fprintf(stderr, "unknown argument '-%c %s'\n", opt, optarg);
-				usage();
+				usage_static();
 				return EXIT_FAILURE;
 		}
 		
 		if( result != HYDRASDR_SUCCESS ) {
 			fprintf(stderr, "argument error: '-%c %s' %s (%d)\n", opt, optarg, hydrasdr_error_name(result), result);
-			usage();
+			usage_static();
 			return EXIT_FAILURE;
 		}
 	}
@@ -725,105 +1012,54 @@ int main(int argc, char** argv)
 		fprintf(stderr, "argument error: num_samples must be less than %s/%sMio\n",
 				u64toa(SAMPLES_TO_XFER_MAX_U64, &ascii_u64_data1),
 				u64toa((SAMPLES_TO_XFER_MAX_U64/FREQ_ONE_MHZ), &ascii_u64_data2) );
-		usage();
+		usage_static();
 		return EXIT_FAILURE;
 	}
 
-	if( freq ) {
-		if( (freq_hz >= FREQ_HZ_MAX) || (freq_hz < FREQ_HZ_MIN) )
-		{
-			fprintf(stderr, "argument error: frequency_MHz=%s MHz and shall be between [%s, %s[ MHz\n",
-							u64toa((freq_hz/FREQ_ONE_MHZ), &ascii_u64_data1),
-							u64toa((FREQ_HZ_MIN/FREQ_ONE_MHZ), &ascii_u64_data2),
-							u64toa((FREQ_HZ_MAX/FREQ_ONE_MHZ), &ascii_u64_data3));
-			usage();
-			return EXIT_FAILURE;
-		}
-	}else
-	{
-		/* Use default freq */
-		freq_hz = DEFAULT_FREQ_HZ;
-	}
+	/* Frequency default and WAV filename generation deferred to after device_info is obtained */
 
 	receiver_mode = HYDRASDR_RECEIVER_MODE_RX;
-	if( receive_wav ) 
+	if( receive_wav )
 	{
 		if (sample_type_val == HYDRASDR_SAMPLE_RAW)
 		{
 			fprintf(stderr, "The RAW sampling mode is not compatible with Wave files\n");
-			usage();
+			usage_static();
 			return EXIT_FAILURE;
 		}
-
-		time (&rawtime);
-		timeinfo = localtime (&rawtime);
-		receiver_mode = HYDRASDR_RECEIVER_MODE_RX;
-		/* File format HydraSDR_<freq_Hz>_<YYYYMMDD>_<HHMMSS>_<sample_type>_<channels>.wav */
-		strftime(date_time, DATE_TIME_MAX_LEN, "%Y%m%d_%H%M%S", timeinfo);
-		snprintf(path_file, PATH_FILE_MAX_LEN, "HydraSDR_%uHz_%s_%s_%s.wav", 
-				 (uint32_t)freq_hz, date_time, sample_type_str, channels_str);
-		path = path_file;
-		fprintf(stderr, "Receive wav file: %s\n", path);
+		/* WAV filename will be generated after device_info is obtained */
 	}
 
-	if( path == NULL ) {
+	if( path == NULL && !receive_wav ) {
 		fprintf(stderr, "error: you shall specify at least -r <with filename> or -w option\n");
-		usage();
+		usage_static();
 		return EXIT_FAILURE;
 	}
 
 	if(packing_val == PACKING_MAX) {
 		fprintf(stderr, "argument error: packing out of range\n");
-		usage();
+		usage_static();
 		return EXIT_FAILURE;
 	}
 
 	if(sample_type_val > SAMPLE_TYPE_MAX) {
 		fprintf(stderr, "argument error: sample_type out of range\n");
-		usage();
+		usage_static();
 		return EXIT_FAILURE;
 	}
 
 	if(biast_val > BIAST_MAX) {
 		fprintf(stderr, "argument error: biast_val out of range\n");
-		usage();
+		usage_static();
 		return EXIT_FAILURE;
 	}
 
-	if(vga_gain > VGA_GAIN_MAX) {
-		fprintf(stderr, "argument error: vga_gain out of range\n");
-		usage();
-		return EXIT_FAILURE;
-	}
-
-	if(mixer_gain > MIXER_GAIN_MAX) {
-		fprintf(stderr, "argument error: mixer_gain out of range\n");
-		usage();
-		return EXIT_FAILURE;
-	}
-
-	if(lna_gain > LNA_GAIN_MAX) {
-		fprintf(stderr, "argument error: lna_gain out of range\n");
-		usage();
-		return EXIT_FAILURE;
-	}
-
-	if(linearity_gain_val > LINEARITY_GAIN_MAX) {
-		fprintf(stderr, "argument error: linearity_gain out of range\n");
-		usage();
-		return EXIT_FAILURE;
-	}
-
-	if(sensitivity_gain_val > SENSITIVITY_GAIN_MAX) {
-		fprintf(stderr, "argument error: sensitivity_gain out of range\n");
-		usage();
-		return EXIT_FAILURE;
-	}
+	/* Gain validation deferred to after device info is obtained */
 
 	if( (linearity_gain == true) && (sensitivity_gain == true) )
 	{
 		fprintf(stderr, "argument error: linearity_gain and sensitivity_gain are both set (choose only one option)\n");
-		usage();
+		usage_static();
 		return EXIT_FAILURE;
 	}
 
@@ -832,7 +1068,6 @@ int main(int argc, char** argv)
 		uint32_t serial_number_msb_val;
 		uint32_t serial_number_lsb_val;
 
-		fprintf(stderr, "hydrasdr_rx v%s\n", HYDRASDR_RX_VERSION);
 		serial_number_msb_val = (uint32_t)(serial_number_val >> 32);
 		serial_number_lsb_val = (uint32_t)(serial_number_val & 0xFFFFFFFF);
 		if(serial_number)
@@ -885,6 +1120,20 @@ int main(int argc, char** argv)
 		}
 	}
 
+	/* Get device info early for capability-based configuration (v1.1.0+ API order) */
+	result = hydrasdr_get_device_info(device, &device_info);
+	if (result != HYDRASDR_SUCCESS) {
+		fprintf(stderr, "hydrasdr_get_device_info() failed: %s (%d)\n",
+			hydrasdr_error_name(result), result);
+		hydrasdr_close(device);
+		return EXIT_FAILURE;
+	}
+	fprintf(stderr, "Device: %s\n", device_info.board_name);
+	fprintf(stderr, "Firmware: %s\n", device_info.firmware_version);
+	fprintf(stderr, "Serial Number: 0x%08X%08X\n",
+		device_info.part_serial.serial_no[2],
+		device_info.part_serial.serial_no[3]);
+
 	result = hydrasdr_set_sample_type(device, sample_type_val);
 	if (result != HYDRASDR_SUCCESS) {
 		fprintf(stderr, "hydrasdr_set_sample_type() failed: %s (%d)\n", hydrasdr_error_name(result), result);
@@ -918,6 +1167,81 @@ int main(int argc, char** argv)
 
 	free(supported_samplerates);
 
+	/* Set decimation mode before sample rate (v1.1.0+ API) */
+	if (decimation_mode) {
+		result = hydrasdr_set_decimation_mode(device, (enum hydrasdr_decimation_mode)decimation_mode_val);
+		if (result != HYDRASDR_SUCCESS) {
+			fprintf(stderr, "hydrasdr_set_decimation_mode() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+		if (verbose) {
+			fprintf(stderr, "Decimation mode: %s\n",
+				decimation_mode_val ? "High Definition (max HW rate + decimation)" : "Low Bandwidth (min HW rate)");
+		}
+	}
+
+	/* Set bandwidth before sample rate (v1.1.0+ API order for auto-bandwidth) */
+	if (device_info.features & HYDRASDR_CAP_BANDWIDTH) {
+		uint32_t bw_count = 0;
+		uint32_t *supported_bandwidths = NULL;
+
+		/* Query available bandwidths */
+		hydrasdr_get_bandwidths(device, &bw_count, 0);
+		if (bw_count > 0) {
+			supported_bandwidths = (uint32_t *)malloc(bw_count * sizeof(uint32_t));
+			if (supported_bandwidths) {
+				hydrasdr_get_bandwidths(device, supported_bandwidths, bw_count);
+
+				if (verbose) {
+					fprintf(stderr, "Supported bandwidths:\n");
+					for (uint32_t i = 0; i < bw_count; i++) {
+						fprintf(stderr, "  [%u] %u Hz (%.3f MHz)\n", i,
+							supported_bandwidths[i],
+							supported_bandwidths[i] / 1e6);
+					}
+				}
+
+				/* Set bandwidth if user specified one */
+				if (bandwidth) {
+					/* Resolve bandwidth: support both index and direct Hz value */
+					uint32_t bw_to_set = bandwidth_val;
+					bool found = false;
+					for (uint32_t i = 0; i < bw_count; i++) {
+						if (bandwidth_val == supported_bandwidths[i]) {
+							found = true;
+							break;
+						}
+					}
+					/* If not found and value is small, treat as index */
+					if (!found && bandwidth_val < bw_count) {
+						bw_to_set = supported_bandwidths[bandwidth_val];
+						if (verbose) {
+							fprintf(stderr, "Interpreting -B %u as index -> %u Hz\n",
+								bandwidth_val, bw_to_set);
+						}
+					}
+
+					result = hydrasdr_set_bandwidth(device, bw_to_set);
+					if (result != HYDRASDR_SUCCESS) {
+						fprintf(stderr, "hydrasdr_set_bandwidth() failed: %s (%d)\n",
+							hydrasdr_error_name(result), result);
+						free(supported_bandwidths);
+						hydrasdr_close(device);
+						return EXIT_FAILURE;
+					}
+					if (verbose) {
+						fprintf(stderr, "Bandwidth set to %u Hz (%.3f MHz)\n",
+							bw_to_set, bw_to_set / 1e6);
+					}
+				}
+				free(supported_bandwidths);
+			}
+		}
+	} else if (bandwidth) {
+		fprintf(stderr, "Warning: -B (Bandwidth) not supported on this device, ignored\n");
+	}
+
 	result = hydrasdr_set_samplerate(device, sample_rate_val);
 	if (result != HYDRASDR_SUCCESS) {
 		fprintf(stderr, "hydrasdr_set_samplerate() failed: %s (%d)\n", hydrasdr_error_name(result), result);
@@ -929,17 +1253,170 @@ int main(int argc, char** argv)
 	{
 		fprintf(stderr, "sample_rate -a %d (%f MSPS %s)\n", sample_rate_val, (wav_sample_per_sec * 0.000001f), wav_nb_channels == 1 ? "Real" : "IQ");
 	}
-	
-	result = hydrasdr_board_partid_serialno_read(device, &read_partid_serialno);
-	if (result != HYDRASDR_SUCCESS) {
-			fprintf(stderr, "hydrasdr_board_partid_serialno_read() failed: %s (%d)\n",
-				hydrasdr_error_name(result), result);
+
+	/* === Apply defaults from device_info === */
+
+	/* Set default frequency if not specified by user */
+	if( !freq ) {
+		/* Use device's min_frequency as default (start of valid range) */
+		freq_hz = device_info.min_frequency;
+	}
+
+	/* Set default gains from device_info if not explicitly set by user */
+	if (!vga_gain_set && (device_info.features & HYDRASDR_CAP_VGA_GAIN)) {
+		vga_gain = (uint32_t)device_info.vga_gain.default_value;
+	}
+	if (!lna_gain_set && (device_info.features & HYDRASDR_CAP_LNA_GAIN)) {
+		lna_gain = (uint32_t)device_info.lna_gain.default_value;
+	}
+	if (!mixer_gain_set && (device_info.features & HYDRASDR_CAP_MIXER_GAIN)) {
+		mixer_gain = (uint32_t)device_info.mixer_gain.default_value;
+	}
+	if (!rf_gain_set && (device_info.features & HYDRASDR_CAP_RF_GAIN)) {
+		rf_gain = (uint32_t)device_info.rf_gain.default_value;
+	}
+	if (!filter_gain_set && (device_info.features & HYDRASDR_CAP_FILTER_GAIN)) {
+		filter_gain = (uint32_t)device_info.filter_gain.default_value;
+	}
+
+	/* Validate sample type against device supported types */
+	if (sample_type && !(device_info.sample_types & (1 << sample_type_val))) {
+		fprintf(stderr, "argument error: sample_type %d (%s) not supported by this device\n",
+			sample_type_val, sample_type_name(sample_type_val));
+		fprintf(stderr, "Supported sample types: ");
+		for (uint8_t i = 0; i < HYDRASDR_SAMPLE_END; i++) {
+			if (device_info.sample_types & (1 << i)) {
+				fprintf(stderr, "%d=%s ", i, sample_type_name((enum hydrasdr_sample_type)i));
+			}
+		}
+		fprintf(stderr, "\n");
+		usage_dynamic(&device_info);
+		hydrasdr_close(device);
+		return EXIT_FAILURE;
+	}
+
+	/* Set default RF port (first port) or validate user's choice */
+	if (rf_port) {
+		if ((device_info.features & HYDRASDR_CAP_RF_PORT_SELECT) && rf_port_val >= device_info.rf_port_count) {
+			fprintf(stderr, "argument error: rf_port %u out of range [0-%d]\n",
+				rf_port_val, device_info.rf_port_count - 1);
+			usage_dynamic(&device_info);
 			hydrasdr_close(device);
 			return EXIT_FAILURE;
+		}
+	} else {
+		/* Default to first port (port 0) */
+		rf_port_val = 0;
 	}
-	fprintf(stderr, "Device Serial Number: 0x%08X%08X\n",
-		read_partid_serialno.serial_no[2],
-		read_partid_serialno.serial_no[3]);
+
+	/* Generate WAV filename now that we have the frequency */
+	if( receive_wav ) {
+		time (&rawtime);
+		timeinfo = localtime (&rawtime);
+		strftime(date_time, DATE_TIME_MAX_LEN, "%Y%m%d_%H%M%S", timeinfo);
+		snprintf(path_file, PATH_FILE_MAX_LEN, "HydraSDR_%uHz_%s_%s_%s.wav",
+				 (uint32_t)freq_hz, date_time, sample_type_str, channels_str);
+		path = path_file;
+		fprintf(stderr, "Receive wav file: %s\n", path);
+	}
+
+	/* === Dynamic validation based on device capabilities === */
+
+	/* Validate frequency against actual device limits */
+	if( freq ) {
+		if( (freq_hz > device_info.max_frequency) || (freq_hz < device_info.min_frequency) )
+		{
+			fprintf(stderr, "argument error: frequency_MHz=%.1f MHz out of device range [%.1f, %.1f] MHz\n",
+							(double)freq_hz / 1e6,
+							(double)device_info.min_frequency / 1e6,
+							(double)device_info.max_frequency / 1e6);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+
+	/* Validate gains against actual device limits */
+	if (vga_gain_set && (device_info.features & HYDRASDR_CAP_VGA_GAIN)) {
+		if (vga_gain < device_info.vga_gain.min_value || vga_gain > device_info.vga_gain.max_value) {
+			fprintf(stderr, "argument error: vga_gain %u out of range [%d-%d]\n",
+				vga_gain, (int)device_info.vga_gain.min_value, (int)device_info.vga_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+	if (lna_gain_set && (device_info.features & HYDRASDR_CAP_LNA_GAIN)) {
+		if (lna_gain < device_info.lna_gain.min_value || lna_gain > device_info.lna_gain.max_value) {
+			fprintf(stderr, "argument error: lna_gain %u out of range [%d-%d]\n",
+				lna_gain, (int)device_info.lna_gain.min_value, (int)device_info.lna_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+	if (mixer_gain_set && (device_info.features & HYDRASDR_CAP_MIXER_GAIN)) {
+		if (mixer_gain < device_info.mixer_gain.min_value || mixer_gain > device_info.mixer_gain.max_value) {
+			fprintf(stderr, "argument error: mixer_gain %u out of range [%d-%d]\n",
+				mixer_gain, (int)device_info.mixer_gain.min_value, (int)device_info.mixer_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+	if (rf_gain_set && (device_info.features & HYDRASDR_CAP_RF_GAIN)) {
+		if (rf_gain < device_info.rf_gain.min_value || rf_gain > device_info.rf_gain.max_value) {
+			fprintf(stderr, "argument error: rf_gain %u out of range [%d-%d]\n",
+				rf_gain, (int)device_info.rf_gain.min_value, (int)device_info.rf_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+	if (filter_gain_set && (device_info.features & HYDRASDR_CAP_FILTER_GAIN)) {
+		if (filter_gain < device_info.filter_gain.min_value || filter_gain > device_info.filter_gain.max_value) {
+			fprintf(stderr, "argument error: filter_gain %u out of range [%d-%d]\n",
+				filter_gain, (int)device_info.filter_gain.min_value, (int)device_info.filter_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+	if (linearity_gain && (device_info.features & HYDRASDR_CAP_LINEARITY_GAIN)) {
+		if (linearity_gain_val < device_info.linearity_gain.min_value || linearity_gain_val > device_info.linearity_gain.max_value) {
+			fprintf(stderr, "argument error: linearity_gain %u out of range [%d-%d]\n",
+				linearity_gain_val, (int)device_info.linearity_gain.min_value, (int)device_info.linearity_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+	if (sensitivity_gain && (device_info.features & HYDRASDR_CAP_SENSITIVITY_GAIN)) {
+		if (sensitivity_gain_val < device_info.sensitivity_gain.min_value || sensitivity_gain_val > device_info.sensitivity_gain.max_value) {
+			fprintf(stderr, "argument error: sensitivity_gain %u out of range [%d-%d]\n",
+				sensitivity_gain_val, (int)device_info.sensitivity_gain.min_value, (int)device_info.sensitivity_gain.max_value);
+			usage_dynamic(&device_info);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+
+	/* Warn about gain options used on unsupported devices */
+	if (vga_gain_set && !(device_info.features & HYDRASDR_CAP_VGA_GAIN)) {
+		fprintf(stderr, "Warning: -v (VGA gain) not supported on this device, ignored\n");
+	}
+	if (lna_gain_set && !(device_info.features & HYDRASDR_CAP_LNA_GAIN)) {
+		fprintf(stderr, "Warning: -l (LNA gain) not supported on this device, ignored\n");
+	}
+	if (mixer_gain_set && !(device_info.features & HYDRASDR_CAP_MIXER_GAIN)) {
+		fprintf(stderr, "Warning: -m (Mixer gain) not supported on this device, ignored\n");
+	}
+	if (rf_gain_set && !(device_info.features & HYDRASDR_CAP_RF_GAIN)) {
+		fprintf(stderr, "Warning: -R (RF gain) not supported on this device, ignored\n");
+	}
+	if (filter_gain_set && !(device_info.features & HYDRASDR_CAP_FILTER_GAIN)) {
+		fprintf(stderr, "Warning: -F (Filter gain) not supported on this device, ignored\n");
+	}
 
 	if( call_set_packing == true )
 	{
@@ -956,6 +1433,20 @@ int main(int argc, char** argv)
 		fprintf(stderr, "hydrasdr_set_rf_bias() failed: %s (%d)\n", hydrasdr_error_name(result), result);
 		hydrasdr_close(device);
 		return EXIT_FAILURE;
+	}
+
+	/* Set RF port if supported */
+	if (device_info.features & HYDRASDR_CAP_RF_PORT_SELECT) {
+		result = hydrasdr_set_rf_port(device, (hydrasdr_rf_port_t)rf_port_val);
+		if( result != HYDRASDR_SUCCESS ) {
+			fprintf(stderr, "hydrasdr_set_rf_port() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+		if (verbose) {
+			fprintf(stderr, "RF port set to %d (%s)\n", rf_port_val,
+				device_info.rf_port_info[rf_port_val].name);
+		}
 	}
 
 	if (!strcmp(path,"-"))
@@ -994,35 +1485,68 @@ int main(int argc, char** argv)
 
 	if( (linearity_gain == false) && (sensitivity_gain == false) )
 	{
-		result = hydrasdr_set_vga_gain(device, vga_gain);
-		if( result != HYDRASDR_SUCCESS ) {
-			fprintf(stderr, "hydrasdr_set_vga_gain() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+		/* VGA gain */
+		if (device_info.features & HYDRASDR_CAP_VGA_GAIN) {
+			result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_VGA, vga_gain);
+			if( result != HYDRASDR_SUCCESS ) {
+				fprintf(stderr, "hydrasdr_set_gain(VGA) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			}
 		}
 
-		result = hydrasdr_set_mixer_gain(device, mixer_gain);
-		if( result != HYDRASDR_SUCCESS ) {
-			fprintf(stderr, "hydrasdr_set_mixer_gain() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+		/* Mixer gain */
+		if (device_info.features & HYDRASDR_CAP_MIXER_GAIN) {
+			result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_MIXER, mixer_gain);
+			if( result != HYDRASDR_SUCCESS ) {
+				fprintf(stderr, "hydrasdr_set_gain(MIXER) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			}
 		}
 
-		result = hydrasdr_set_lna_gain(device, lna_gain);
-		if( result != HYDRASDR_SUCCESS ) {
-			fprintf(stderr, "hydrasdr_set_lna_gain() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+		/* LNA gain */
+		if (device_info.features & HYDRASDR_CAP_LNA_GAIN) {
+			result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_LNA, lna_gain);
+			if( result != HYDRASDR_SUCCESS ) {
+				fprintf(stderr, "hydrasdr_set_gain(LNA) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			}
+		}
+
+		/* RF gain (if supported - uses device default if not explicitly set) */
+		if (device_info.features & HYDRASDR_CAP_RF_GAIN) {
+			result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_RF, rf_gain);
+			if( result != HYDRASDR_SUCCESS ) {
+				fprintf(stderr, "hydrasdr_set_gain(RF) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			}
+		}
+
+		/* Filter gain (if supported - uses device default if not explicitly set) */
+		if (device_info.features & HYDRASDR_CAP_FILTER_GAIN) {
+			result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_FILTER, filter_gain);
+			if( result != HYDRASDR_SUCCESS ) {
+				fprintf(stderr, "hydrasdr_set_gain(FILTER) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			}
 		}
 	} else
 	{
 		if( linearity_gain == true )
 		{
-			result =  hydrasdr_set_linearity_gain(device, linearity_gain_val);
-			if( result != HYDRASDR_SUCCESS ) {
-				fprintf(stderr, "hydrasdr_set_linearity_gain() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			if (device_info.features & HYDRASDR_CAP_LINEARITY_GAIN) {
+				result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_LINEARITY, linearity_gain_val);
+				if( result != HYDRASDR_SUCCESS ) {
+					fprintf(stderr, "hydrasdr_set_gain(LINEARITY) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+				}
+			} else {
+				fprintf(stderr, "Warning: Linearity gain not supported on this device\n");
 			}
 		}
 
 		if( sensitivity_gain == true )
 		{
-			result =  hydrasdr_set_sensitivity_gain(device, sensitivity_gain_val);
-			if( result != HYDRASDR_SUCCESS ) {
-				fprintf(stderr, "hydrasdr_set_sensitivity_gain() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			if (device_info.features & HYDRASDR_CAP_SENSITIVITY_GAIN) {
+				result = hydrasdr_set_gain(device, HYDRASDR_GAIN_TYPE_SENSITIVITY, sensitivity_gain_val);
+				if( result != HYDRASDR_SUCCESS ) {
+					fprintf(stderr, "hydrasdr_set_gain(SENSITIVITY) failed: %s (%d)\n", hydrasdr_error_name(result), result);
+				}
+			} else {
+				fprintf(stderr, "Warning: Sensitivity gain not supported on this device\n");
 			}
 		}
 	}
@@ -1051,9 +1575,31 @@ int main(int argc, char** argv)
 		(do_exit == false) )
 	{
 		float average_rate_now = average_rate * 1e-6f;
-		sprintf(str, "%2.3f", average_rate_now);
-		average_rate_now = 9.5f;
-		fprintf(stderr, "Streaming at %5s MSPS\n", str);
+		snprintf(str, sizeof(str), "%2.3f", average_rate_now);
+
+		/* Read and display temperature if supported */
+		if (device_info.features & HYDRASDR_CAP_TEMPERATURE_SENSOR) {
+			hydrasdr_temperature_t temp;
+			if (hydrasdr_get_temperature(device, &temp) == HYDRASDR_SUCCESS && temp.valid) {
+				/* Update statistics with timestamps */
+				if (temp.temperature_celsius < temp_min_celsius) {
+					temp_min_celsius = temp.temperature_celsius;
+					time(&temp_min_time);
+				}
+				if (temp.temperature_celsius > temp_max_celsius) {
+					temp_max_celsius = temp.temperature_celsius;
+					time(&temp_max_time);
+				}
+				temp_sample_count++;
+
+				fprintf(stderr, "Streaming at %5s MSPS, Temp: %.2f DegC\n", str, temp.temperature_celsius);
+			} else {
+				fprintf(stderr, "Streaming at %5s MSPS\n", str);
+			}
+		} else {
+			fprintf(stderr, "Streaming at %5s MSPS\n", str);
+		}
+
 		if ((limit_num_samples == true) && (bytes_to_xfer == 0))
 			do_exit = true;
 		else
@@ -1075,7 +1621,36 @@ int main(int argc, char** argv)
 	{
 		fprintf(stderr, "Average speed %2.4f MSPS %s\n", (global_average_rate * 1e-6f / rate_samples), (wav_nb_channels == 2 ? "IQ" : "Real"));
 	}
-	
+
+	/* Report dropped samples (buffer overflows) */
+	if (total_dropped_samples > 0)
+	{
+		fprintf(stderr, "WARNING: %s samples dropped (buffer overflow)\n",
+			u64toa(total_dropped_samples, &ascii_u64_data1));
+	}
+	else
+	{
+		fprintf(stderr, "No samples dropped\n");
+	}
+
+	/* Report temperature statistics if supported */
+	if ((device_info.features & HYDRASDR_CAP_TEMPERATURE_SENSOR) && temp_sample_count > 0)
+	{
+		float temp_min_f = (temp_min_celsius * 9.0f / 5.0f) + 32.0f;
+		float temp_max_f = (temp_max_celsius * 9.0f / 5.0f) + 32.0f;
+		char min_time_str[32], max_time_str[32];
+		double duration_sec = difftime(temp_max_time, temp_min_time);
+
+		strftime(min_time_str, sizeof(min_time_str), "%H:%M:%S", localtime(&temp_min_time));
+		strftime(max_time_str, sizeof(max_time_str), "%H:%M:%S", localtime(&temp_max_time));
+
+		fprintf(stderr, "Temperature: Min %.2f DegC (%.2f DegF) at %s, Max %.2f DegC (%.2f DegF) at %s (%.0fs)\n",
+			temp_min_celsius, temp_min_f, min_time_str,
+			temp_max_celsius, temp_max_f, max_time_str,
+			duration_sec >= 0 ? duration_sec : -duration_sec);
+	}
+
+	/* Stop device and close */
 	if(device != NULL)
 	{
 		result = hydrasdr_stop_rx(device);
@@ -1084,33 +1659,47 @@ int main(int argc, char** argv)
 		}
 
 		result = hydrasdr_close(device);
-		if( result != HYDRASDR_SUCCESS ) 
+		if( result != HYDRASDR_SUCCESS )
 		{
 			fprintf(stderr, "hydrasdr_close() failed: %s (%d)\n", hydrasdr_error_name(result), result);
 		}
 	}
-		
+
+	/* Finalize WAV file header */
 	if(fd != NULL)
 	{
-		if( receive_wav ) 
+		if( receive_wav )
 		{
-			/* Get size of file */
+			int seek_result;
+			size_t write_result;
+
+			/* Flush all pending writes before getting file position */
+			fflush(fd);
 			file_pos = ftell(fd);
-			/* Wav Header */
+
+			/* Update WAV header with final sizes */
 			wave_file_hdr.hdr.size = file_pos - 8;
-			/* Wav Format Chunk */
 			wave_file_hdr.fmt_chunk.wFormatTag = wav_format_tag;
 			wave_file_hdr.fmt_chunk.wChannels = wav_nb_channels;
 			wave_file_hdr.fmt_chunk.dwSamplesPerSec = wav_sample_per_sec;
 			wave_file_hdr.fmt_chunk.dwAvgBytesPerSec = wave_file_hdr.fmt_chunk.dwSamplesPerSec * wav_nb_byte_per_sample;
 			wave_file_hdr.fmt_chunk.wBlockAlign = wav_nb_channels * (wav_nb_bits_per_sample / 8);
 			wave_file_hdr.fmt_chunk.wBitsPerSample = wav_nb_bits_per_sample;
-			/* Wav Data Chunk */
 			wave_file_hdr.data_chunk.chunkSize = file_pos - sizeof(t_wav_file_hdr);
+
 			/* Overwrite header with updated data */
-			rewind(fd);
-			fwrite(&wave_file_hdr, 1, sizeof(t_wav_file_hdr), fd);
-		}	
+			fflush(fd);
+			seek_result = fseek(fd, 0, SEEK_SET);
+			if (seek_result != 0) {
+				fprintf(stderr, "ERROR: fseek to beginning failed: %d\n", seek_result);
+			}
+			write_result = fwrite(&wave_file_hdr, 1, sizeof(t_wav_file_hdr), fd);
+			if (write_result != sizeof(t_wav_file_hdr)) {
+				fprintf(stderr, "ERROR: WAV header write failed: wrote %zu of %zu bytes\n",
+					write_result, sizeof(t_wav_file_hdr));
+			}
+			fflush(fd);
+		}
 		fclose(fd);
 		fd = NULL;
 	}

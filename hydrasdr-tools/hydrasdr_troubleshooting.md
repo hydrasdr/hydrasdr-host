@@ -1,6 +1,6 @@
 This page provides some quick tips on troubleshooting problems.
 
-Most common problem to use HydraSDR RFOne at full speed 10MSPS(320Mbit/s) (and even 5MSPS / 2.5MSPS) are mainly related to USB controller or/and CPU.
+Most common problem to use HydraSDR software-defined radio at full speed 10MSPS(320Mbit/s) (and even 5MSPS / 2.5MSPS) are mainly related to USB controller or/and CPU.
 
 We created a set of command line utilities to help troubleshooting the performance problems.
 
@@ -19,8 +19,8 @@ We created a set of command line utilities to help troubleshooting the performan
 
 ## Linux (Debian/Ubuntu):
 Ubuntu users: 22.04 / 24.04 LTS is highly recommended.
-- **Building HydraSDR RFOne, gr-osmosdr and gqrx:**
-    1. Download the [hydrasdr_host_git](https://github.com/hydrasdr/hydrasdr-host) repository, compile it, install it
+- **Building HydraSDR Host, gr-osmosdr and gqrx:**
+    1. Download the [hydrasdr-host_git](https://github.com/hydrasdr/hydrasdr-host) repository, compile it, install it
     1. Download the [gr-osmosdr hydrasdr fork](https://github.com/hydrasdr/gr-osmosdr) repository, compile it, install it
     1. Download the [gqrx](https://github.com/csete/gqrx.git) repository, compile it, install it
     1. Get pulseaudio using standard Arch way
@@ -37,7 +37,7 @@ Ubuntu users: 22.04 / 24.04 LTS is highly recommended.
     - Use a PCIe USB2.0/3.0 controller
 
 ## OSX:
-- For Gqrx, gr-osmosdr and HydraSDR RFOne see https://groups.google.com/forum/#!topic/gqrx/u4duL8iPva0
+- For Gqrx, gr-osmosdr and HydraSDR software-defined radio see https://groups.google.com/forum/#!topic/gqrx/u4duL8iPva0
 
 - **Performance problems:**
   - Open a shell and run `hydrasdr_rx -r /dev/null -t 0`
@@ -59,21 +59,21 @@ Fix to apply
 # Problematic Configurations
 Post here only if minimum hardware requirements match:
 - 3rd gen Intel i3 2.4 GHz CPU or equivalent
-- 2GB of RAM (to run your own OS, HydraSDR RFOne barely needs 1MB of memory)
+- 2GB of RAM (to run your own OS, HydraSDR software-defined radio barely needs 1MB of memory)
 - High speed USB 2.0/3.0 controller
 
 Cheap StarTech.com 4 Port PCI Express PCIe SuperSpeed USB 2.0/3.0 Controller (PEXUSB3S4V) which can be found on following links:
 - https://www.amazon.com/StarTech-com-Express-SuperSpeed-Controller-Adapter/dp/B009AT5SVS
 - https://www.startech.com/en-fr/cards-adapters/pexusb3s4v
 
-More feedback are welcome about those cheap PCIe USB2.0/3.0 controller to ensure they work fine with HydraSDR RFOne + Host Tools (especially with Windows, Linux & MacOS).
+More feedback are welcome about those cheap PCIe USB2.0/3.0 controller to ensure they work fine with HydraSDR software-defined radio + Host Tools (especially with Windows, Linux & MacOS).
 
 # How to Check if the External Clock is Active
 
 The external reference clock input (`CLKIN`) is fixed in firmware to **10 MHz**.
-- It must be connected and stable **before powering on or resetting** the HydraSDR RFOne, since the device only checks for a valid external clock during startup.
+- It must be connected and stable **before powering on or resetting** the HydraSDR software-defined radio, since the device only checks for a valid external clock during startup.
   - If `CLKIN` is not detected, the internal TCXO will be used instead.
-  - If needed, HydraSDR RFOne can also be reset via the dedicated API or the `hydrasdr_reset` tool.
+  - If needed, HydraSDR software-defined radio can also be reset via the dedicated API or the `hydrasdr_reset` tool.
 
 To verify whether the external clock was active at power-on, run:
 ```
@@ -94,8 +94,8 @@ For more details on the `CLKIN Loss Of Signal` register used in this check, see:
   * [AN619 PDF](https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/application-notes/AN619.pdf)
 
 
-# Using multiple HydraSDR RFOne
-Multiple HydraSDR RFOne use case is mainly for Coherent Receiver Array, Direction Finding, Passive Radar ... which requires to have multiple HydraSDR RFOne running at same time (on the same PC).
+# Using multiple HydraSDR software-defined radio
+Multiple HydraSDR software-defined radio use case is mainly for Coherent Receiver Array, Direction Finding, Passive Radar ... which requires to have multiple HydraSDR software-defined radio running at same time (on the same PC).
 
 * StarTech PEXUSB3S44V with dedicated USB channels seems to be one of the best cards on the market, see for example some test here https://github.com/openstf/stf
 
@@ -109,6 +109,6 @@ Multiple HydraSDR RFOne use case is mainly for Coherent Receiver Array, Directio
   Official StarTech.com link: https://www.startech.com/en-us/cards-adapters/pexusb3s42v price about 93USD
   Amazon.com link https://www.amazon.com/StarTech-com-Express-SuperSpeed-Dedicated-Channels/dp/B00HJZE9VK price about 80USD (4 dedicated USB3 ports is recommended as it is just 10USD more)
 
-> It is heavily recommended to have a high end PC at least CoreI7 in order to use multiple HydraSDR RFOne at same time on the same PC.
+> It is heavily recommended to have a high end PC at least CoreI7 in order to use multiple HydraSDR software-defined radio at same time on the same PC.
 > * For example with a CoreI7-3630QM @2.4GHz (4cores), SDR++ use about 10% CPU with 10MSPS with 32K FFT and FM stereo.
 

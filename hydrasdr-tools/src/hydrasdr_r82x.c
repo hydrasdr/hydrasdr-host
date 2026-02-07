@@ -1,7 +1,10 @@
 /*
- * Copyright 2013-2025 Benjamin Vernoux <bvernoux@hydrasdr.com>
+ * Copyright 2013-2026 Benjamin Vernoux <bvernoux@hydrasdr.com>
  *
  * This file is part of HydraSDR.
+ *
+ * DEPRECATED: This tool is for RFOne devices only (R82x tuner).
+ * For hardware-agnostic tuner access, use hydrasdr_tuner instead.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +29,13 @@
 #include <string.h>
 #include <getopt.h>
 
+/* This tool intentionally uses deprecated R82x APIs for direct register access */
+#ifdef _MSC_VER
+#pragma warning(disable: 4996)  /* deprecated function */
+#elif defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
 #ifndef bool
 typedef int bool;
@@ -38,6 +48,10 @@ typedef int bool;
 #define REGISTER_NUM_MAX (31)
 
 static void usage() {
+	printf("\n");
+	printf("*** DEPRECATED: This tool is for RFOne devices only (R82x tuner). ***\n");
+	printf("*** Use 'hydrasdr_tuner' for hardware-agnostic tuner access.      ***\n");
+	printf("\n");
 	printf("Usage:\n");
 	printf("\t-n, --register <n>: set register <n>[%d,%d] for subsequent read/write operations\n", REGISTER_NUM_MIN, REGISTER_NUM_MAX);
 	printf("\t-r, --read: read register specified by last -n argument, or all registers\n");
@@ -194,6 +208,23 @@ int main(int argc, char** argv) {
 	uint32_t serial_number_msb_val;
 	uint32_t serial_number_lsb_val;
 	int result;
+	hydrasdr_lib_version_t lib_version;
+	hydrasdr_device_info_t device_info;
+
+	/* Display library version and check compatibility */
+	hydrasdr_lib_version(&lib_version);
+	printf("HydraSDR R82x Tool (libhydrasdr v%d.%d.%d)\n",
+	       lib_version.major_version, lib_version.minor_version, lib_version.revision);
+	printf("*** DEPRECATED: This tool is for RFOne devices only (R82x tuner). ***\n");
+	{
+		uint32_t runtime_ver = HYDRASDR_MAKE_VERSION(lib_version.major_version,
+		                                              lib_version.minor_version,
+		                                              lib_version.revision);
+		uint32_t min_ver = HYDRASDR_MAKE_VERSION(1, 1, 0);
+		if (runtime_ver < min_ver) {
+			fprintf(stderr, "[WARN] Library version too old: need v1.1.0+\n");
+		}
+	}
 
 	option_index = 0;
 	while( (opt = getopt_long(argc, argv, "cn:rw:s:", long_options, &option_index)) != EOF )
@@ -226,6 +257,24 @@ int main(int argc, char** argv) {
 			usage();
 			return EXIT_FAILURE;
 		}
+	}
+
+	/* Get device info for capability check */
+	result = hydrasdr_get_device_info(device, &device_info);
+	if (result != HYDRASDR_SUCCESS) {
+		fprintf(stderr, "hydrasdr_get_device_info() failed: %s (%d)\n",
+			hydrasdr_error_name(result), result);
+		hydrasdr_close(device);
+		return EXIT_FAILURE;
+	}
+
+	printf("Device: %s (FW: %s)\n", device_info.board_name, device_info.firmware_version);
+
+	/* Check if RF frontend is supported - R82x is a specific RF frontend */
+	if (!(device_info.features & HYDRASDR_CAP_RF_FRONTEND)) {
+		fprintf(stderr, "Error: RF frontend register access not supported on this device.\n");
+		hydrasdr_close(device);
+		return EXIT_FAILURE;
 	}
 
 	result = HYDRASDR_ERROR_OTHER;

@@ -1,4 +1,4 @@
-Source: hydrasdr-host-tools
+Source: hydrasdr-host
 Section: comm
 Priority: optional
 Maintainer: Benjamin Vernoux <bvernoux@hydrasdr.com>
@@ -19,10 +19,10 @@ Depends: libhydrasdr0 (= ${binary:Version}),
          libusb-1.0-0-dev,
          ${misc:Depends}
 Multi-Arch: same
-Description: HydraSDR Software Defined Radio Host Tools and Libraries (Debian/Ubuntu)
- Host tools and shared libraries for HydraSDR RFOne software-defined radio.
+Description: HydraSDR Host Tools and Libraries (Debian/Ubuntu)
+ Host tools and shared libraries for HydraSDR software-defined radio.
  Provides command-line utilities and development libraries for interfacing
- with HydraSDR RFOne hardware.
+ with HydraSDR software-defined radio hardware.
  .
  This package contains development files.
 
@@ -32,23 +32,23 @@ Architecture: any
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Multi-Arch: same
-Description: HydraSDR Software Defined Radio Host Tools and Libraries (Debian/Ubuntu)
- Host tools and shared libraries for HydraSDR RFOne software-defined radio.
+Description: HydraSDR Host Tools and Libraries (Debian/Ubuntu)
+ Host tools and shared libraries for HydraSDR software-defined radio.
  Provides command-line utilities and development libraries for interfacing
- with HydraSDR RFOne hardware.
+ with HydraSDR software-defined radio hardware.
  .
  This package contains the shared library.
 
-Package: hydrasdr-host-tools
+Package: hydrasdr-host
 Architecture: any
 Depends: ${misc:Depends},
  ${shlibs:Depends},
  libusb-1.0-0 (>= 1.0.20),
  libhydrasdr0 (= ${binary:Version}),
-Description: HydraSDR Software Defined Radio Host Tools and Libraries (Debian/Ubuntu)
- Host tools and shared libraries for HydraSDR RFOne software-defined radio.
+Description: HydraSDR Host Tools and Libraries (Debian/Ubuntu)
+ Host tools and shared libraries for HydraSDR software-defined radio.
  Provides command-line utilities and development libraries for interfacing
- with HydraSDR RFOne hardware.
+ with HydraSDR software-defined radio hardware.
  .
  This package includes:
   - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)

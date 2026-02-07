@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2025 Benjamin Vernoux <bvernoux@hydrasdr.com>
+ * Copyright 2024-2026 Benjamin Vernoux <bvernoux@hydrasdr.com>
  *
  * This file is part of HydraSDR.
  *
@@ -35,9 +35,9 @@ typedef int bool;
 #endif
 
 #define HYDRASDR_MAX_DEVICE (32)
-char version[255 + 1];
-hydrasdr_read_partid_serialno_t read_partid_serialno;
+
 struct hydrasdr_device* devices[HYDRASDR_MAX_DEVICE+1] = { NULL };
+hydrasdr_device_info_t device_infos[HYDRASDR_MAX_DEVICE+1];
 
 int parse_u64(char* s, uint64_t* const value) {
 	uint_fast8_t base = 10;
@@ -85,10 +85,24 @@ int main(int argc, char** argv)
 	uint32_t serial_number_lsb_val;
 	hydrasdr_lib_version_t lib_version;
 
+	/* Display library version and check compatibility */
+	hydrasdr_lib_version(&lib_version);
+	printf("HydraSDR Reset Tool (libhydrasdr v%d.%d.%d)\n",
+	       lib_version.major_version, lib_version.minor_version, lib_version.revision);
+	{
+		uint32_t runtime_ver = HYDRASDR_MAKE_VERSION(lib_version.major_version,
+		                                              lib_version.minor_version,
+		                                              lib_version.revision);
+		uint32_t min_ver = HYDRASDR_MAKE_VERSION(1, 1, 0);
+		if (runtime_ver < min_ver) {
+			fprintf(stderr, "[WARN] Library version too old: need v1.1.0+\n");
+		}
+	}
+
 	while( (opt = getopt(argc, argv, "s:")) != EOF )
 	{
 		result = HYDRASDR_SUCCESS;
-		switch( opt ) 
+		switch( opt )
 		{
 		case 's':
 			serial_number = true;
@@ -103,17 +117,13 @@ int main(int argc, char** argv)
 			usage();
 			return EXIT_FAILURE;
 		}
-		
+
 		if( result != HYDRASDR_SUCCESS ) {
 			printf("argument error: '-%c %s' %s (%d)\n", opt, optarg, hydrasdr_error_name(result), result);
 			usage();
 			return EXIT_FAILURE;
-		}		
-	}
-
-	hydrasdr_lib_version(&lib_version);
-	printf("hydrasdr_lib_version: %d.%d.%d\n", 
-					lib_version.major_version, lib_version.minor_version, lib_version.revision); 
+		}
+	} 
 
 	for (i = 0; i < HYDRASDR_MAX_DEVICE; i++)
 	{
@@ -139,16 +149,33 @@ int main(int argc, char** argv)
 	{
 		if(devices[i] != NULL)
 		{
-			printf("\nFound HydraSDR board %d\n", i + 1);
-			printf("Execute reset\n");
+			hydrasdr_device_info_t *info = &device_infos[i];
+
+			printf("\n=== Board %d ===\n", i + 1);
 			fflush(stdout);
+
+			/* Get device info */
+			result = hydrasdr_get_device_info(devices[i], info);
+			if (result != HYDRASDR_SUCCESS) {
+				fprintf(stderr, "hydrasdr_get_device_info() failed: %s (%d)\n",
+				        hydrasdr_error_name(result), result);
+				hydrasdr_close(devices[i]);
+				continue;
+			}
+
+			printf("Device: %s (FW: %s)\n", info->board_name, info->firmware_version);
+			printf("Executing reset...\n");
+			fflush(stdout);
+
 			result = hydrasdr_reset(devices[i]);
 			if (result != HYDRASDR_SUCCESS) {
 				fprintf(stderr, "hydrasdr_reset() failed: %s (%d)\n",
 					hydrasdr_error_name(result), result);
+				hydrasdr_close(devices[i]);
 				continue;
 			}
-			printf("Close board %d\n", i+1);
+
+			printf("Reset successful, closing board %d\n", i+1);
 			result = hydrasdr_close(devices[i]);
 			if (result != HYDRASDR_SUCCESS) {
 				fprintf(stderr, "hydrasdr_close() board %d failed: %s (%d)\n",

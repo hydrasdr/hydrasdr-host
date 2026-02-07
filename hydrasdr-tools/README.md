@@ -1,25 +1,67 @@
-HydraSDR RFOne
-==============
+# hydrasdr-tools
 
-A tiny, efficient and ultra evolutive software defined radio.
+Command-line utilities for HydraSDR Software Defined Radio devices.
 
-This repository contains host software (Linux/Windows) for HydraSDR RFOne, a project to
-produce a low cost, open source software radio platform.
+## Overview
 
-HydraSDR: https://www.hydrasdr.com
+hydrasdr-tools provides a comprehensive set of command-line utilities for
+controlling and interacting with HydraSDR hardware.
 
-For more details on how to build hydrasdr-tools see previous directory host README.md file.
+## Tools
 
-This file is part of HydraSDR (based on AirSpy and HackRF project see https://github.com/greatscottgadgets/hackrf/tree/master/host).
+| Tool | Description |
+|------|-------------|
+| `hydrasdr_rx` | Receive and record RF samples to file |
+| `hydrasdr_async_rx` | Asynchronous RF receiver with streaming |
+| `hydrasdr_info` | Display device information and capabilities |
+| `hydrasdr_list_devices` | List connected HydraSDR devices |
+| `hydrasdr_lib_version` | Display library version |
+| `hydrasdr_calibrate` | Frequency calibration utility |
+| `hydrasdr_clockgen` | Clock generator configuration |
+| `hydrasdr_gpio` | GPIO pin control |
+| `hydrasdr_gpiodir` | GPIO direction configuration |
+| `hydrasdr_reset` | Reset device |
+| `hydrasdr_rf_frontend` | RF frontend configuration |
+| `hydrasdr_set_rf_port` | RF port selection |
+| `hydrasdr_spiflash` | SPI flash programming |
+| `hydrasdr_r82x` | R82xx tuner configuration |
+| `hydrasdr_si5351c` | Si5351C clock generator control |
+| `hydrasdr_ddc_benchmark` | DDC algorithm benchmarking |
+| `hydrasdr_api_benchmark` | API performance benchmarking |
+
+## Building
+
+See the parent directory README.md for complete build instructions.
+
+### Quick Start (Linux/macOS)
+
+```bash
+mkdir build && cd build
+cmake ..
+make
+```
+
+### Quick Start (Windows with MSYS2/MinGW64)
+
+```bash
+mkdir build && cd build
+cmake .. -G "Ninja"
+ninja
+```
 
 ## Documentation
 
-### [Command Line Tools Documentation](hydrasdr_tools_readme.md)
-Complete reference for all HydraSDR command line utilities including usage examples, parameters, and build instructions for GPIO control, RF capture, calibration, and device management.
+- [Command Line Tools Reference](hydrasdr_tools_readme.md) - Complete usage guide
+- [Frequency Calibration Procedure](hydrasdr_calibration_procedure.md) - PPB calibration
+- [Troubleshooting Guide](hydrasdr_troubleshooting.md) - Performance optimization
 
-### [Frequency Calibration Procedure](hydrasdr_calibration_procedure.md)
-Step-by-step guide for calibrating the frequency accuracy of your HydraSDR RFOne device using PPB corrections, including measurement techniques and verification steps.
+## License
 
-### [HydraSDR RFOne Troubleshooting](hydrasdr_troubleshooting.md)
-Comprehensive troubleshooting guide for HydraSDR RFOne performance issues, focusing on achieving optimal throughput (10MSPS) and resolving USB/CPU bottlenecks.
-Covers platform-specific solutions for Windows, Linux, and macOS, hardware requirements, external clock verification, VMWare configuration fixes, and multi-device setups for coherent receiver arrays.
+GNU General Public License v2.0 (GPL-2.0)
+
+This software is based on the HackRF project. See [LICENSE.md](LICENSE.md) for details.
+
+## Links
+
+- HydraSDR: https://www.hydrasdr.com
+- HackRF Project: https://greatscottgadgets.com/hackrf/

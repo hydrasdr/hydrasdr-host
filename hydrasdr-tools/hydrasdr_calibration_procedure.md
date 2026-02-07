@@ -2,7 +2,7 @@
 
 ## Overview
 
-This procedure allows you to calibrate the frequency accuracy of your HydraSDR RFOne device 
+This procedure allows you to calibrate the frequency accuracy of your HydraSDR software-defined radio device 
 by measuring and correcting frequency errors using parts-per-billion (PPB) corrections.
 
 ## Step-by-Step Calibration
@@ -12,7 +12,7 @@ by measuring and correcting frequency errors using parts-per-billion (PPB) corre
    hydrasdr_calibrate -w 0
    ```
 
-2. **Restart the device**: Power cycle the HydraSDR RFOne or use `hydrasdr_reset` to ensure the new calibration is loaded during boot initialization
+2. **Restart the device**: Power cycle the HydraSDR software-defined radio or use `hydrasdr_reset` to ensure the new calibration is loaded during boot initialization
 
 3. **Measure frequency error**: Use your measurement tool to compare actual frequency output against expected frequency, then calculate the correction needed using a PPM/PPB calculator (such as https://www.sitime.com/ppm-hz-calculator) - round the result to the nearest PPB value
 
@@ -21,7 +21,7 @@ by measuring and correcting frequency errors using parts-per-billion (PPB) corre
    hydrasdr_calibrate -w -1942
    ```
 
-5. **Restart the device again**: Power cycle the HydraSDR RFOne or use `hydrasdr_reset` to load and apply the new calibration settings
+5. **Restart the device again**: Power cycle the HydraSDR software-defined radio or use `hydrasdr_reset` to load and apply the new calibration settings
 
 6. **Verify calibration**: Test with your measurement software to confirm the frequency correction is now accurate
 

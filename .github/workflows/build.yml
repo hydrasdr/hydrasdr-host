@@ -1,19 +1,23 @@
-# Copyright (c) 2025, Benjamin Vernoux <bvernoux@hydrasdr.com>
+# Copyright (c) 2025-2026, Benjamin Vernoux <bvernoux@hydrasdr.com>
 # 
 # This workflow is licensed exclusively for HydraSDR products and related development.
 # Unauthorized use, modification, or distribution for non-HydraSDR products is prohibited.
 # All rights reserved.
 #
-# HydraSDR Software Defined Radio Host Tools  Build and Release Workflow
+# HydraSDR Software Defined Radio Host Tools Build and Release Workflow
 # For more information about HydraSDR products: https://hydrasdr.com
 
-name: Build and Release HydraSDR Software Defined Radio Host Tools  + Shared Lib / DLL (Windows, GNU/Linux, MacOS)
+name: Build and Release HydraSDR Host Tools + Shared Lib / DLL (Windows, GNU/Linux, MacOS)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
+# Permissions needed for creating releases
+permissions:
+  contents: write
 
 env:
   # Global environment variables
@@ -32,9 +36,156 @@ jobs:
     - name: Extract version
       id: version
       run: |
-        VERSION=$(grep '#define HYDRASDR_VERSION' libhydrasdr/src/hydrasdr.h | sed 's/.*"\([^"]*\)".*/\1/')
+        VERSION=$(grep '#define HYDRASDR_VERSION "' libhydrasdr/src/hydrasdr.h | sed 's/.*"\([^"]*\)".*/\1/')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Extracted version: $VERSION"
+  # Generate Doxygen documentation
+  build_documentation:
+    needs: extract-version
+    runs-on: ubuntu-latest
+    name: Generate Documentation
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install documentation dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y doxygen graphviz texlive-latex-base texlive-latex-extra texlive-fonts-recommended latexmk ghostscript
+
+    - name: Generate Doxyfiles
+      run: |
+        # Function to generate a Doxyfile
+        generate_doxyfile() {
+          local PROJECT_NAME=$1
+          local INPUT_DIR=$2
+          local OUTPUT_DIR=$3
+          local PROJECT_BRIEF=$4
+          
+          echo "Generating Doxyfile for ${PROJECT_NAME}..."
+          
+          # Create output directory
+          mkdir -p "${OUTPUT_DIR}"
+          
+          # Generate default Doxyfile
+          doxygen -g "${OUTPUT_DIR}/Doxyfile"
+          
+          # Customize the Doxyfile
+          sed -i "s|^PROJECT_NAME.*|PROJECT_NAME = \"${PROJECT_NAME}\"|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^PROJECT_NUMBER.*|PROJECT_NUMBER = ${{ needs.extract-version.outputs.version }}|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^PROJECT_BRIEF.*|PROJECT_BRIEF = \"${PROJECT_BRIEF}\"|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^OUTPUT_DIRECTORY.*|OUTPUT_DIRECTORY = ${OUTPUT_DIR}|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^INPUT .*|INPUT = ${INPUT_DIR}|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^RECURSIVE.*|RECURSIVE = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^EXTRACT_ALL.*|EXTRACT_ALL = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^EXTRACT_PRIVATE.*|EXTRACT_PRIVATE = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^EXTRACT_STATIC.*|EXTRACT_STATIC = YES|" "${OUTPUT_DIR}/Doxyfile"
+          # Avoid duplicating brief description in detailed section
+          sed -i "s|^REPEAT_BRIEF.*|REPEAT_BRIEF = NO|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^GENERATE_LATEX.*|GENERATE_LATEX = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^HAVE_DOT.*|HAVE_DOT = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^CALL_GRAPH.*|CALL_GRAPH = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^CALLER_GRAPH.*|CALLER_GRAPH = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^DOT_IMAGE_FORMAT.*|DOT_IMAGE_FORMAT = svg|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^INTERACTIVE_SVG.*|INTERACTIVE_SVG = YES|" "${OUTPUT_DIR}/Doxyfile"
+          # Parallelize graphviz: 0 = auto-detect CPU cores
+          sed -i "s|^DOT_NUM_THREADS.*|DOT_NUM_THREADS = 0|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^OPTIMIZE_OUTPUT_FOR_C.*|OPTIMIZE_OUTPUT_FOR_C = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^SOURCE_BROWSER.*|SOURCE_BROWSER = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^INLINE_SOURCES.*|INLINE_SOURCES = NO|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^GENERATE_TREEVIEW.*|GENERATE_TREEVIEW = YES|" "${OUTPUT_DIR}/Doxyfile"
+
+          # PDF optimization: remove blank pages and fix formatting
+          sed -i "s|^COMPACT_LATEX.*|COMPACT_LATEX = YES|" "${OUTPUT_DIR}/Doxyfile"
+          sed -i "s|^PDF_HYPERLINKS.*|PDF_HYPERLINKS = YES|" "${OUTPUT_DIR}/Doxyfile"
+
+          # Don't use mainpage from README (causes duplicate text issues)
+          sed -i "s|^USE_MDFILE_AS_MAINPAGE.*|USE_MDFILE_AS_MAINPAGE =|" "${OUTPUT_DIR}/Doxyfile"
+
+          echo "Doxyfile generated at: ${OUTPUT_DIR}/Doxyfile"
+        }
+        
+        # Generate Doxyfile for libhydrasdr
+        generate_doxyfile \
+          "HydraSDR Library" \
+          "libhydrasdr/src" \
+          "docs/libhydrasdr" \
+          "Software-defined radio library for HydraSDR software-defined radio hardware"
+        
+    - name: Build libhydrasdr documentation
+      run: |
+        echo "Building libhydrasdr documentation..."
+        # Run doxygen from repo root (paths in Doxyfile are relative to root)
+        doxygen docs/libhydrasdr/Doxyfile
+
+        # Build PDF from LaTeX
+        if [ -d "docs/libhydrasdr/latex" ]; then
+          echo "Generating PDF documentation..."
+          cd docs/libhydrasdr/latex
+          make pdf || echo "Warning: PDF generation failed, continuing anyway"
+          if [ -f "refman.pdf" ]; then
+            mv refman.pdf ../libhydrasdr-documentation-v${{ needs.extract-version.outputs.version }}.pdf
+            echo "PDF generated: libhydrasdr-documentation-v${{ needs.extract-version.outputs.version }}.pdf"
+          fi
+          cd ../../..
+        fi
+    
+    - name: Prepare documentation content
+      run: |
+        VERSION="${{ needs.extract-version.outputs.version }}"
+        DOC_DIR="${{ env.PACKAGE_NAME }}-documentation-v${VERSION}"
+
+        mkdir -p "${DOC_DIR}"
+
+        # Copy HTML documentation
+        if [ -d "docs/libhydrasdr/html" ]; then
+          cp -r docs/libhydrasdr/html "${DOC_DIR}/libhydrasdr-html"
+        fi
+
+        if [ -d "docs/hydrasdr-tools/html" ]; then
+          cp -r docs/hydrasdr-tools/html "${DOC_DIR}/hydrasdr-tools-html"
+        fi
+
+        # Copy PDF documentation
+        if [ -f "docs/libhydrasdr/libhydrasdr-documentation-v${VERSION}.pdf" ]; then
+          cp docs/libhydrasdr/libhydrasdr-documentation-v${VERSION}.pdf "${DOC_DIR}/"
+        fi
+
+        if [ -f "docs/hydrasdr-tools/hydrasdr-tools-documentation-v${VERSION}.pdf" ]; then
+          cp docs/hydrasdr-tools/hydrasdr-tools-documentation-v${VERSION}.pdf "${DOC_DIR}/"
+        fi
+
+        # Create README for documentation package
+        {
+          echo "HydraSDR Library Documentation"
+          echo "=============================="
+          echo ""
+          echo "This package contains the API documentation for libhydrasdr."
+          echo ""
+          echo "Contents:"
+          echo "---------"
+          echo "libhydrasdr-html/                         - HTML documentation (open index.html)"
+          echo "libhydrasdr-documentation-v${VERSION}.pdf - PDF documentation"
+          echo ""
+          echo "Documentation includes:"
+          echo "-----------------------"
+          echo "- API reference for all functions, structures, and constants"
+          echo "- Call graphs and caller graphs"
+          echo "- Source code cross-references"
+          echo "- File and module organization"
+          echo ""
+          echo "For more information, visit: https://hydrasdr.com"
+        } > "${DOC_DIR}/README.txt"
+
+        echo "Documentation content prepared in: ${DOC_DIR}"
+        ls -la "${DOC_DIR}/"
+
+    - name: Upload documentation artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PACKAGE_NAME }}-documentation-v${{ needs.extract-version.outputs.version }}
+        path: ${{ env.PACKAGE_NAME }}-documentation-v${{ needs.extract-version.outputs.version }}/
+        retention-days: 30
 
   build:
     needs: extract-version
@@ -47,18 +198,22 @@ jobs:
           - os: windows-2022
             name: "Windows-x64"
             platform: "windows"
+            run_benchmark: true
           - os: ubuntu-24.04
             name: "Ubuntu-24.04-LTS-Noble-Numbat"
             platform: "linux"
             create_deb: true
+            run_benchmark: true
           - os: macos-14
             name: "macOS-ARM64"
             platform: "macos"
             arch: "arm64"
+            run_benchmark: true
           - os: macos-15-intel
             name: "macOS-x86_64"
             platform: "macos"
             arch: "x86_64"
+            run_benchmark: true
 
     name: ${{ matrix.name }}
 
@@ -76,9 +231,10 @@ jobs:
       if: matrix.platform == 'macos'
       env:
         HOMEBREW_NO_AUTO_UPDATE: 1
+        HOMEBREW_NO_INSTALL_CLEANUP: 1
       run: |
-        brew uninstall --ignore-dependencies cmake || true
-        brew install --quiet cmake libusb pkg-config
+        brew install --quiet libusb pkg-config || true
+        # cmake is pre-installed on GitHub runners
 
     # === Windows Dependencies ===
     - name: Setup Windows build tools
@@ -89,14 +245,14 @@ jobs:
       if: matrix.platform == 'windows'
       shell: powershell
       run: |
-        # Download dependencies
-        Invoke-WebRequest "https://github.com/libusb/libusb/releases/download/v1.0.23/libusb-1.0.23.7z" -OutFile "libusb.7z"
+        # Download dependencies (libusb 1.0.29 + pthreads-win32)
+        Invoke-WebRequest "https://github.com/libusb/libusb/releases/download/v1.0.29/libusb-1.0.29.7z" -OutFile "libusb.7z"
         Invoke-WebRequest "https://gcc.gnu.org/pub/pthreads-win32/pthreads-w32-2-9-1-release.zip" -OutFile "pthreads.zip"
-        
-        # Extract libusb
+
+        # Extract libusb using 7z (CMake's native extraction doesn't support all 7z codecs)
         New-Item -ItemType Directory -Path "deps\libusb" -Force
         7z x libusb.7z -o"deps\libusb"
-        
+
         # Extract pthreads
         Expand-Archive pthreads.zip -DestinationPath "temp" -Force
         $prebuilt = Get-ChildItem "temp" -Recurse -Directory | Where-Object { $_.Name -eq "Pre-built.2" }
@@ -108,26 +264,25 @@ jobs:
     - name: Configure build (Linux)
       if: matrix.platform == 'linux'
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF -DENABLE_SHARED_LIB=ON
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF
 
     - name: Configure build (macOS)
       if: matrix.platform == 'macos'
       run: |
         if [ "${{ matrix.arch }}" = "arm64" ]; then
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SHARED_LIB=ON
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
         else
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DENABLE_SHARED_LIB=ON
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
         fi
 
     - name: Configure build (Windows)
       if: matrix.platform == 'windows'
       run: |
         cmake -B build -G "Visual Studio 17 2022" -A x64 `
-          -DLIBUSB_INCLUDE_DIR="$PWD\deps\libusb\include\libusb-1.0" `
-          -DLIBUSB_LIBRARIES="$PWD\deps\libusb\MS64\dll\libusb-1.0.lib" `
+          -DLIBUSB_INCLUDE_DIR="$PWD\deps\libusb\include" `
+          -DLIBUSB_LIBRARIES="$PWD\deps\libusb\VS2022\MS64\dll\libusb-1.0.lib" `
           -DTHREADS_PTHREADS_INCLUDE_DIR="$PWD\deps\pthreads\include" `
-          -DTHREADS_PTHREADS_WIN32_LIBRARY="$PWD\deps\pthreads\lib\x64\pthreadVC2.lib" `
-          -DENABLE_SHARED_LIB=ON
+          -DTHREADS_PTHREADS_WIN32_LIBRARY="$PWD\deps\pthreads\lib\x64\pthreadVC2.lib"
 
     # === Build ===
     - name: Build (Linux/macOS)
@@ -168,11 +323,25 @@ jobs:
       run: |
         $dir = "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         New-Item -ItemType Directory -Path $dir -Force
+
+        # Debug: List deps structure
+        Write-Host "=== Deps directory structure ==="
+        Get-ChildItem -Path "deps" -Recurse -Name | Where-Object { $_ -match "\.dll$|\.lib$" }
+
+        # Copy build outputs (MSVC puts DLL in hydrasdr-tools/src due to RUNTIME_OUTPUT_DIRECTORY_RELEASE)
         Copy-Item "build\libhydrasdr\src\Release\*.lib" $dir -ErrorAction SilentlyContinue
-        Copy-Item "build\hydrasdr-tools\src\hydrasdr.dll" $dir -ErrorAction SilentlyContinue
-        Copy-Item "deps\libusb\MS64\dll\libusb-1.0.dll" $dir -ErrorAction SilentlyContinue
-        Copy-Item "deps\pthreads\dll\x64\pthreadVC2.dll" $dir -ErrorAction SilentlyContinue
+        Copy-Item "build\hydrasdr-tools\src\hydrasdr.dll" $dir -ErrorAction Stop
+
+        # Copy required DLLs (fail if missing)
+        # Note: pthreads4w is statically linked, no DLL needed
+        Copy-Item "deps\libusb\VS2022\MS64\dll\libusb-1.0.dll" $dir -ErrorAction Stop
+
+        # Copy executables
         Copy-Item "build\hydrasdr-tools\src\Release\*.exe" $dir
+
+        # Verify package contents
+        Write-Host "=== Package contents ==="
+        Get-ChildItem $dir
 
     # === Create .deb package (shared function) ===
     - name: Create .deb package
@@ -180,7 +349,13 @@ jobs:
       shell: bash
       run: |
         PACKAGE_VERSION="${{ needs.extract-version.outputs.version }}"
-        ARCH="amd64"
+        # Detect architecture for .deb package
+        if [ "$(uname -m)" = "aarch64" ]; then
+          ARCH="arm64"
+        else
+          ARCH="amd64"
+        fi
+        echo "Building .deb package for architecture: $ARCH"
         
         # Use the standard package name for internal package creation
         PACKAGE_NAME_FULL="${{ env.PACKAGE_NAME }}"
@@ -210,15 +385,17 @@ jobs:
         Depends: libusb-1.0-0 (>= 1.0.20)
         Maintainer: ${{ env.MAINTAINER }}
         Homepage: ${{ env.HOMEPAGE }}
-        Description: HydraSDR Software Defined Radio Host Tools  and Libraries
-         Host tools and shared libraries for HydraSDR RFOne software-defined radio.
+        Description: HydraSDR Host Tools and Libraries
+         Host tools and shared libraries for HydraSDR software-defined radio.
          Provides command-line utilities and development libraries for interfacing
-         with HydraSDR RFOne hardware.
+         with HydraSDR software-defined radio hardware.
          .
          This package includes:
           - libhydrasdr shared library
           - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)
-          - udev rules for non-root device access
+          - Development headers and pkg-config files
+         .
+         Built for: ${{ matrix.name }}
         EOF
         
         # Create maintenance scripts
@@ -246,7 +423,7 @@ jobs:
         # Create documentation
         cat > "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/copyright" << EOF
         Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-        Upstream-Name: HydraSDR Software Defined Radio Host Tools 
+        Upstream-Name: HydraSDR Host Tools
         Upstream-Contact: ${{ env.MAINTAINER }}
         Source: https://github.com/hydrasdr/hydrasdr-host
         
@@ -300,6 +477,28 @@ jobs:
         build/hydrasdr-tools/src/hydrasdr_lib_version
         timeout 10s build/hydrasdr-tools/src/hydrasdr_info || echo "No HydraSDR hardware detected (normal in CI environment)"
 
+    - name: Run DDC Benchmark (Linux)
+      if: matrix.platform == 'linux' && matrix.run_benchmark == true
+      run: |
+        export LD_LIBRARY_PATH=build/libhydrasdr/src:$LD_LIBRARY_PATH
+        echo "=== DDC Benchmark Results (${{ matrix.name }}) ==="
+        echo "Architecture: $(uname -m)"
+        echo "CPU Info:"
+        cat /proc/cpuinfo | grep -E "(model name|Hardware|CPU implementer|CPU part)" | head -4 || true
+        echo ""
+        echo "Running DDC benchmark..."
+        build/hydrasdr-tools/src/hydrasdr_ddc_benchmark | tee benchmark_results.txt
+        echo ""
+        echo "=== Benchmark Complete ==="
+
+    - name: Upload Benchmark Results (Linux)
+      if: matrix.platform == 'linux' && matrix.run_benchmark == true
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-${{ matrix.name }}
+        path: benchmark_results.txt
+        retention-days: 30
+
     - name: Test (macOS)
       if: matrix.platform == 'macos'
       run: |
@@ -307,16 +506,59 @@ jobs:
         build/hydrasdr-tools/src/hydrasdr_lib_version
         timeout 10s build/hydrasdr-tools/src/hydrasdr_info || echo "No HydraSDR hardware detected (normal in CI environment)"
 
+    - name: Run DDC Benchmark (macOS)
+      if: matrix.platform == 'macos' && matrix.run_benchmark == true
+      run: |
+        export DYLD_LIBRARY_PATH=build/libhydrasdr/src:$DYLD_LIBRARY_PATH
+        echo "=== DDC Benchmark Results (${{ matrix.name }}) ==="
+        echo "Architecture: $(uname -m)"
+        echo "CPU Info:"
+        sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown CPU"
+        echo "CPU Cores: $(sysctl -n hw.ncpu)"
+        echo ""
+        echo "Running DDC benchmark..."
+        build/hydrasdr-tools/src/hydrasdr_ddc_benchmark | tee benchmark_results.txt
+        echo ""
+        echo "=== Benchmark Complete ==="
+
+    - name: Upload Benchmark Results (macOS)
+      if: matrix.platform == 'macos' && matrix.run_benchmark == true
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-${{ matrix.name }}
+        path: benchmark_results.txt
+        retention-days: 30
+
     - name: Test (Windows)
       if: matrix.platform == 'windows'
       shell: cmd
       run: |
-        copy deps\libusb\MS64\dll\libusb-1.0.dll build\hydrasdr-tools\src\Release\ >nul 2>&1
-        copy deps\pthreads\dll\x64\pthreadVC2.dll build\hydrasdr-tools\src\Release\ >nul 2>&1
-        copy build\hydrasdr-tools\src\hydrasdr.dll build\hydrasdr-tools\src\Release\ >nul 2>&1
-        build\hydrasdr-tools\src\Release\hydrasdr_lib_version.exe
-        timeout 10 build\hydrasdr-tools\src\Release\hydrasdr_info.exe >nul 2>&1 || echo No HydraSDR hardware detected (normal in CI environment)
+        cd ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
+        hydrasdr_lib_version.exe
+        timeout 10 hydrasdr_info.exe >nul 2>&1 || echo No HydraSDR hardware detected (normal in CI environment)
         exit /b 0
+
+    - name: Run DDC Benchmark (Windows)
+      if: matrix.platform == 'windows' && matrix.run_benchmark == true
+      shell: cmd
+      run: |
+        echo === DDC Benchmark Results (${{ matrix.name }}) ===
+        echo Architecture: x64
+        echo.
+        echo Running DDC benchmark...
+        cd ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
+        hydrasdr_ddc_benchmark.exe > ..\benchmark_results.txt 2>&1
+        type ..\benchmark_results.txt
+        echo.
+        echo === Benchmark Complete ===
+
+    - name: Upload Benchmark Results (Windows)
+      if: matrix.platform == 'windows' && matrix.run_benchmark == true
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-${{ matrix.name }}
+        path: benchmark_results.txt
+        retention-days: 30
 
     # === Upload ===
     - name: Upload artifacts
@@ -429,9 +671,8 @@ jobs:
             create_deb: true
             deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
             mint_version: "21.1"
-          
+
           # Fedora Latest Versions
-            # Fedora Latest Versions
           - container: "fedora:42"
             name: "Fedora-42"
             pkg_manager: "dnf"
@@ -442,7 +683,7 @@ jobs:
             pkg_manager: "dnf"
             create_rpm: true
             deps: "gcc gcc-c++ cmake pkg-config libusb1-devel make rpm-build rpmdevtools tar gzip"
-          
+
           # Enterprise Linux
           - container: "almalinux:9"
             name: "AlmaLinux-9"
@@ -450,7 +691,7 @@ jobs:
             create_rpm: true
             deps: "gcc gcc-c++ cmake pkg-config libusb1-devel make epel-release rpm-build rpmdevtools"
             enable_repos: true
-          
+
           # Rolling Release Distributions
           - container: "archlinux:latest"
             name: "Arch-Linux"
@@ -468,131 +709,64 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # === Unified dependency installation ===
-    - name: Install dependencies
+    - name: Install dependencies (apt)
+      if: matrix.pkg_manager == 'apt'
       run: |
-        case "${{ matrix.pkg_manager }}" in
-          "apt")
-            export DEBIAN_FRONTEND=noninteractive
-            export TZ=UTC
-            apt-get update
-            apt-get install -y ${{ matrix.deps }}
-            ;;
-          "dnf")
-            # Special handling for Fedora 41/42 potential issues
-            if [[ "${{ matrix.name }}" == *"Fedora-4"* ]]; then
-              dnf update -y --best --allowerasing
-              dnf install -y ${{ matrix.deps }}
-              # Install additional dependencies that might be needed
-              dnf install -y which findutils
-            else
-              dnf update -y
-              dnf install -y ${{ matrix.deps }}
-            fi
-            ${{ matrix.enable_repos == true && 'dnf config-manager --set-enabled crb || dnf config-manager --set-enabled powertools || true' || '' }}
-            # Install chrpath with fallback to patchelf (try EPEL for AlmaLinux)
-            if [[ "${{ matrix.name }}" == *"AlmaLinux"* ]]; then
-              dnf install -y chrpath || dnf install -y patchelf || echo "Warning: Neither chrpath nor patchelf available"
-            else
-              dnf install -y chrpath || dnf install -y patchelf || echo "Warning: Neither chrpath nor patchelf available"
-            fi
-            ;;
-          "pacman")
-            # Special handling for Arch Linux
-            pacman -Sy --noconfirm archlinux-keyring
-            pacman -Syu --noconfirm
-            pacman -S --noconfirm ${{ matrix.deps }}
-            # Ensure makepkg is properly configured
-            if ! grep -q "^builduser" /etc/passwd; then
-              echo "Setting up build environment for Arch Linux"
-            fi
-            ;;
-          "zypper")
-            zypper refresh
-            zypper install -y ${{ matrix.deps }}
-            # Install chrpath with fallback to patchelf
-            zypper install -y chrpath || zypper install -y patchelf || echo "Warning: Neither chrpath nor patchelf available"
-            ;;
-        esac
+        export DEBIAN_FRONTEND=noninteractive
+        export TZ=UTC
+        apt-get update
+        apt-get install -y --no-install-recommends ${{ matrix.deps }}
 
-    # === Build Configuration ===
+    - name: Install dependencies (dnf)
+      if: matrix.pkg_manager == 'dnf'
+      run: |
+        dnf install -y --setopt=install_weak_deps=False ${{ matrix.deps }}
+
+    - name: Install dependencies (pacman)
+      if: matrix.pkg_manager == 'pacman'
+      run: |
+        pacman -Syu --noconfirm --needed
+        pacman -S --noconfirm --needed ${{ matrix.deps }}
+
+    - name: Install dependencies (zypper)
+      if: matrix.pkg_manager == 'zypper'
+      run: |
+        zypper --non-interactive install --no-recommends ${{ matrix.deps }}
+
     - name: Configure build
       run: |
-        CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF -DENABLE_SHARED_LIB=ON"
-        
-        # Add extra configuration if specified
-        if [ -n "${{ matrix.extra_config }}" ]; then
-          CMAKE_FLAGS="$CMAKE_FLAGS ${{ matrix.extra_config }}"
-        fi
-        
-        echo "Building with flags: $CMAKE_FLAGS"
-        cmake -B build $CMAKE_FLAGS
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF
 
-    # === Build ===
     - name: Build
       run: cmake --build build --config Release --parallel
 
-    # === Debug build output ===
-    - name: Debug build output
-      if: matrix.create_rpm == true || matrix.create_pkg == true
-      run: |
-        echo "=== Build directory structure ==="
-        find build -type f -name "*.so*" -o -name "hydrasdr_*" | head -20
-        echo "=== Library files ==="
-        ls -la build/libhydrasdr/src/ || echo "No libhydrasdr build directory"
-        echo "=== Tool files ==="
-        ls -la build/hydrasdr-tools/src/ || echo "No hydrasdr-tools build directory"
-        echo "=== System info ==="
-        uname -a
-        if command -v gcc >/dev/null 2>&1; then
-          gcc --version | head -1
-        fi
-        if command -v cmake >/dev/null 2>&1; then
-          cmake --version | head -1
-        fi
-
-    # === Package Artifacts ===
     - name: Package artifacts
       run: |
         ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         mkdir -p "$ARTIFACT_DIR"
-        cp -a build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
+        cp build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/"
 
-    # === Create .deb package for Debian/Ubuntu/Linux Mint ===
     - name: Create .deb package
       if: matrix.create_deb == true
       shell: bash
       run: |
         PACKAGE_VERSION="${{ needs.extract-version.outputs.version }}"
         ARCH="amd64"
-        
-        # Determine package name based on distribution
-        if [ -n "${{ matrix.mint_version }}" ]; then
-          PACKAGE_NAME_FULL="${{ env.PACKAGE_NAME }}-mint${{ matrix.mint_version }}"
-          DIST_DESC="Linux Mint ${{ matrix.mint_version }}"
-        else
-          PACKAGE_NAME_FULL="${{ env.PACKAGE_NAME }}"
-          DIST_DESC="Debian/Ubuntu"
-        fi
-        
+
+        PACKAGE_NAME_FULL="${{ env.PACKAGE_NAME }}"
         PACKAGE_DIR="${PACKAGE_NAME_FULL}_${PACKAGE_VERSION}_${ARCH}"
-        
-        # Create package directory structure
+
         mkdir -p "${PACKAGE_DIR}/DEBIAN"
         mkdir -p "${PACKAGE_DIR}/usr/lib"
         mkdir -p "${PACKAGE_DIR}/usr/bin"
         mkdir -p "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}"
         mkdir -p "${PACKAGE_DIR}/etc/udev/rules.d"
-        
-        # Copy binaries and libraries (use cp -a to preserve symlinks)
-        cp -a build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
+
+        cp build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "${PACKAGE_DIR}/usr/bin/"
-        
-        # Copy udev rules file from repository
         cp hydrasdr-tools/51-hydrasdr.rules "${PACKAGE_DIR}/etc/udev/rules.d/51-hydrasdr.rules"
-        
-        # Create control file
+
         cat > "${PACKAGE_DIR}/DEBIAN/control" << EOF
         Package: ${PACKAGE_NAME_FULL}
         Version: ${PACKAGE_VERSION}
@@ -601,19 +775,17 @@ jobs:
         Architecture: ${ARCH}
         Depends: libusb-1.0-0 (>= 1.0.20)
         Maintainer: ${{ env.MAINTAINER }}
-        Homepage: ${{ env.HOMEPAGE }}
-        Description: HydraSDR Software Defined Radio Host Tools  and Libraries (${DIST_DESC})
-         Host tools and shared libraries for HydraSDR RFOne software-defined radio.
-         Provides command-line utilities and development libraries for interfacing
-         with HydraSDR RFOne hardware.
+        Description: HydraSDR Host Tools and Libraries
+         Host tools and shared libraries for HydraSDR software-defined radio.
          .
          This package includes:
           - libhydrasdr shared library
           - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)
-          - udev rules for non-root device access
+         .
+         Built for: ${{ matrix.name }}
+        Homepage: ${{ env.HOMEPAGE }}
         EOF
-        
-        # Create maintenance scripts
+
         cat > "${PACKAGE_DIR}/DEBIAN/postinst" << 'EOF'
         #!/bin/bash
         set -e
@@ -623,7 +795,7 @@ jobs:
         fi
         exit 0
         EOF
-        
+
         cat > "${PACKAGE_DIR}/DEBIAN/postrm" << 'EOF'
         #!/bin/bash
         set -e
@@ -632,356 +804,223 @@ jobs:
         fi
         exit 0
         EOF
-        
+
         chmod 755 "${PACKAGE_DIR}/DEBIAN/postinst" "${PACKAGE_DIR}/DEBIAN/postrm"
-        
-        # Create documentation
+
         cat > "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/copyright" << EOF
         Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-        Upstream-Name: HydraSDR Software Defined Radio Host Tools 
+        Upstream-Name: HydraSDR Host Tools
         Upstream-Contact: ${{ env.MAINTAINER }}
         Source: https://github.com/hydrasdr/hydrasdr-host
-        
+
         Files: *
         Copyright: 2025 ${{ env.MAINTAINER }}
         License: Custom-HydraSDR
          This software is licensed exclusively for HydraSDR products and related development.
-         Unauthorized use, modification, or distribution for non-HydraSDR products is prohibited.
-         All rights reserved.
         EOF
-        
-        cat > "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/changelog.Debian" << EOF
-        ${PACKAGE_NAME_FULL} (${PACKAGE_VERSION}) unstable; urgency=medium
-        
-          * Automated build from CI for ${{ matrix.name }}
-          * Built from commit ${{ github.sha }}
-        
-         -- ${{ env.MAINTAINER }}  $(date -R)
-        EOF
-        
-        gzip -9 "${PACKAGE_DIR}/usr/share/doc/${PACKAGE_NAME_FULL}/changelog.Debian"
-        
-        # Set permissions (use -type f to only chmod actual files, not symlinks)
+
         find "${PACKAGE_DIR}" -type d -exec chmod 755 {} \;
         find "${PACKAGE_DIR}/usr/bin" -type f -exec chmod 755 {} \;
-        find "${PACKAGE_DIR}/usr/lib" -name "*.so*" -type f -exec chmod 644 {} \;
+        find "${PACKAGE_DIR}/usr/lib" -name "*.so*" -exec chmod 644 {} \;
         chmod 644 "${PACKAGE_DIR}/etc/udev/rules.d/51-hydrasdr.rules"
-        
-        # Build and verify package
+
         dpkg-deb --build "${PACKAGE_DIR}"
-        
-        # Rename to distribution-specific name
+
         DIST_SPECIFIC_NAME="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${PACKAGE_VERSION}.deb"
         mv "${PACKAGE_DIR}.deb" "${DIST_SPECIFIC_NAME}"
-        
-        dpkg-deb --info "${DIST_SPECIFIC_NAME}"
-        dpkg-deb --contents "${DIST_SPECIFIC_NAME}"
-        echo "Created distribution-specific .deb package: ${DIST_SPECIFIC_NAME}"
 
-    # === Create .rpm package for Red Hat family (Fedora/AlmaLinux/openSUSE) ===
+        dpkg-deb --info "${DIST_SPECIFIC_NAME}"
+        echo "Created .deb package: ${DIST_SPECIFIC_NAME}"
+
     - name: Create .rpm package
       if: matrix.create_rpm == true
       shell: bash
       run: |
-        set -e
         PACKAGE_VERSION="${{ needs.extract-version.outputs.version }}"
-        
+
+        # Install patchelf to strip rpath
+        if command -v dnf &> /dev/null; then
+          dnf install -y patchelf || true
+        elif command -v zypper &> /dev/null; then
+          zypper --non-interactive install patchelf || true
+        fi
+
         # Setup RPM build environment
-        rpmdev-setuptree
-        
-        # Generate changelog date
-        CHANGELOG_DATE=$(date "+%a %b %d %Y")
-        
-        # Determine libusb package name based on distribution
-        if [[ "${{ matrix.name }}" == *"openSUSE"* ]]; then
-          LIBUSB_DEP="libusb-1_0-0"
-          LIBUSB_DEVEL_DEP="libusb-1_0-devel"
-        else
-          LIBUSB_DEP="libusb1"
-          LIBUSB_DEVEL_DEP="libusb1-devel"
+        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+        # Create tarball for RPM - handle library symlinks properly
+        TARBALL_DIR="${{ env.PACKAGE_NAME }}-${PACKAGE_VERSION}"
+        mkdir -p "${TARBALL_DIR}"
+
+        # Copy only the real library file (not symlinks)
+        REAL_LIB=$(readlink -f build/libhydrasdr/src/libhydrasdr.so 2>/dev/null || echo "build/libhydrasdr/src/libhydrasdr.so")
+        if [ -f "$REAL_LIB" ]; then
+          cp "$REAL_LIB" "${TARBALL_DIR}/libhydrasdr.so.${PACKAGE_VERSION}"
+          patchelf --remove-rpath "${TARBALL_DIR}/libhydrasdr.so.${PACKAGE_VERSION}" 2>/dev/null || true
         fi
-        
-        # Create RPM spec file
-        cat > ~/rpmbuild/SPECS/${{ env.PACKAGE_NAME }}.spec << EOF
-        Name:           ${{ env.PACKAGE_NAME }}
-        Version:        ${PACKAGE_VERSION}
-        Release:        1%{?dist}
-        Summary:        HydraSDR Software Defined Radio Host Tools  and Libraries
-        
-        License:        Custom-HydraSDR
-        URL:            ${{ env.HOMEPAGE }}
-        
-        BuildRequires:  gcc gcc-c++ cmake pkg-config ${LIBUSB_DEVEL_DEP} make
-        Requires:       ${LIBUSB_DEP} >= 1.0.20
-        
-        %description
-        Host tools and shared libraries for HydraSDR RFOne software-defined radio.
-        Provides command-line utilities and development libraries for interfacing
-        with HydraSDR RFOne hardware.
-        
-        This package includes:
-        - libhydrasdr shared library
-        - Command-line tools (hydrasdr_info, hydrasdr_lib_version, etc.)
-        - udev rules for non-root device access
-        
-        Built for: ${{ matrix.name }}
-        
-        %prep
-        # Copy source files to build directory
-        mkdir -p %{_builddir}/%{name}-%{version}
-        cp -a %{_sourcedir}/* %{_builddir}/%{name}-%{version}/
-        
-        %build
-        # Files already built, just verify they exist
-        ls -la %{_builddir}/%{name}-%{version}/build/libhydrasdr/src/
-        ls -la %{_builddir}/%{name}-%{version}/build/hydrasdr-tools/src/
-        
-        %install
-        rm -rf %{buildroot}
-        
-        # Create directory structure
-        mkdir -p %{buildroot}/usr/lib
-        mkdir -p %{buildroot}/usr/bin
-        mkdir -p %{buildroot}/etc/udev/rules.d
-        
-        # Copy files from build directory (use cp -a to preserve symlinks)
-        cp -a %{_builddir}/%{name}-%{version}/build/libhydrasdr/src/libhydrasdr.so* %{buildroot}/usr/lib/ || true
-        cp %{_builddir}/%{name}-%{version}/build/hydrasdr-tools/src/hydrasdr_* %{buildroot}/usr/bin/
-        cp %{_builddir}/%{name}-%{version}/hydrasdr-tools/51-hydrasdr.rules %{buildroot}/etc/udev/rules.d/51-hydrasdr.rules
-        
-        # Debug: Show RPATH information before fixing
-        echo "=== RPATH Information Before Fixing ==="
-        for binary in %{buildroot}/usr/bin/hydrasdr_*; do
-          if [ -f "\$binary" ]; then
-            echo "Binary: \$binary"
-            if command -v chrpath >/dev/null 2>&1; then
-              chrpath -l "\$binary" || echo "No RPATH found"
-            elif command -v readelf >/dev/null 2>&1; then
-              readelf -d "\$binary" | grep -E "(RPATH|RUNPATH)" || echo "No RPATH found"
-            fi
-          fi
-        done
-        
-        # Fix RPATH issues by stripping RPATH from binaries
-        echo "=== Fixing RPATH Issues ==="
-        for binary in %{buildroot}/usr/bin/hydrasdr_*; do
-          if [ -f "\$binary" ]; then
-            echo "Processing binary: \$binary"
-            # Strip RPATH using chrpath if available, otherwise use patchelf
-            if command -v chrpath >/dev/null 2>&1; then
-              chrpath -d "\$binary" 2>/dev/null || echo "Could not remove RPATH from \$binary"
-            elif command -v patchelf >/dev/null 2>&1; then
-              patchelf --remove-rpath "\$binary" 2>/dev/null || echo "Could not remove RPATH from \$binary"
-            else
-              echo "Warning: Neither chrpath nor patchelf available to fix RPATH"
-            fi
-          fi
-        done
-        
-        # Set proper RPATH for shared libraries if needed
-        for lib in %{buildroot}/usr/lib/libhydrasdr.so*; do
-          if [ -f "\$lib" ] && [ ! -L "\$lib" ]; then
-            echo "Processing library: \$lib"
-            if command -v chrpath >/dev/null 2>&1; then
-              chrpath -r /usr/lib "\$lib" 2>/dev/null || echo "Could not set RPATH for \$lib"
-            elif command -v patchelf >/dev/null 2>&1; then
-              patchelf --set-rpath /usr/lib "\$lib" 2>/dev/null || echo "Could not set RPATH for \$lib"
-            fi
-          fi
-        done
-        
-        # Debug: Show RPATH information after fixing
-        echo "=== RPATH Information After Fixing ==="
-        for binary in %{buildroot}/usr/bin/hydrasdr_*; do
-          if [ -f "\$binary" ]; then
-            echo "Binary: \$binary"
-            if command -v chrpath >/dev/null 2>&1; then
-              chrpath -l "\$binary" || echo "No RPATH found (expected)"
-            elif command -v readelf >/dev/null 2>&1; then
-              readelf -d "\$binary" | grep -E "(RPATH|RUNPATH)" || echo "No RPATH found (expected)"
-            fi
-          fi
-        done
-        
-        %post
-        /sbin/ldconfig
-        if command -v udevadm >/dev/null 2>&1; then
-            udevadm control --reload-rules || true
-            udevadm trigger || true
-        fi
-        
-        %postun
-        /sbin/ldconfig
-        
-        %files
-        %defattr(-,root,root,-)
-        /usr/lib/libhydrasdr.so*
-        /usr/bin/hydrasdr_*
-        /etc/udev/rules.d/51-hydrasdr.rules
-        
-        %changelog
-        * ${CHANGELOG_DATE} ${{ env.MAINTAINER }} - ${PACKAGE_VERSION}-1
-        - Automated build from CI for ${{ matrix.name }}
-        - Built from commit ${{ github.sha }}
-        EOF
-        
-        # Copy source files to SOURCES directory (use cp -a to preserve symlinks)
-        cp -a . ~/rpmbuild/SOURCES/
-        
-        # Build the RPM package
-        rpmbuild -bb ~/rpmbuild/SPECS/${{ env.PACKAGE_NAME }}.spec \
-          --define "_sourcedir $(pwd)" \
-          --define "_builddir $HOME/rpmbuild/BUILD" \
-          --define "_buildrootdir $HOME/rpmbuild/BUILDROOT"
-        
-        # Copy the built RPM to current directory and rename to distribution-specific name
-        find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} . \;
-        
-        # Rename RPM to distribution-specific name
-        for rpm_file in *.rpm; do
-          if [ -f "$rpm_file" ]; then
-            DIST_SPECIFIC_NAME="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${PACKAGE_VERSION}.rpm"
-            mv "$rpm_file" "$DIST_SPECIFIC_NAME"
-            echo "Renamed $rpm_file to $DIST_SPECIFIC_NAME"
-            break
-          fi
-        done
-        
-        # Verify the renamed package
-        for rpm_file in ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.rpm; do
-          if [ -f "$rpm_file" ]; then
-            echo "Created distribution-specific RPM package: $rpm_file"
-            rpm -qip "$rpm_file" || echo "Could not query package info"
-            rpm -qlp "$rpm_file" || echo "Could not query package files"
+
+        # Copy binaries and strip rpath
+        for bin in build/hydrasdr-tools/src/hydrasdr_*; do
+          if [ -f "$bin" ] && [ -x "$bin" ]; then
+            cp "$bin" "${TARBALL_DIR}/"
+            binname=$(basename "$bin")
+            patchelf --remove-rpath "${TARBALL_DIR}/${binname}" 2>/dev/null || true
           fi
         done
 
-    # === Create .pkg.tar.xz package for Arch Linux ===
-    - name: Create .pkg.tar.xz package
+        cp hydrasdr-tools/51-hydrasdr.rules "${TARBALL_DIR}/"
+
+        tar -czf ~/rpmbuild/SOURCES/${TARBALL_DIR}.tar.gz "${TARBALL_DIR}"
+
+        # Create spec file with debuginfo disabled
+        cat > ~/rpmbuild/SPECS/hydrasdr.spec << 'SPEC_EOF'
+        # Disable debuginfo and debugsource packages (binaries are pre-built)
+        %global debug_package %{nil}
+        %undefine _debugsource_packages
+
+        Name:           PACKAGE_NAME_PLACEHOLDER
+        Version:        PACKAGE_VERSION_PLACEHOLDER
+        Release:        1%{?dist}
+        Summary:        HydraSDR Host Tools and Libraries
+
+        License:        Custom-HydraSDR
+        URL:            https://hydrasdr.com
+        Source0:        %{name}-%{version}.tar.gz
+
+        Requires:       libusb1 >= 1.0.20
+
+        # Disable automatic dependency generation
+        AutoReqProv:    no
+
+        %description
+        Host tools and shared libraries for HydraSDR software-defined radio.
+
+        %prep
+        %setup -q
+
+        %install
+        mkdir -p %{buildroot}%{_libdir}
+        mkdir -p %{buildroot}%{_bindir}
+        mkdir -p %{buildroot}/etc/udev/rules.d
+
+        # Install library with proper symlinks
+        install -m755 libhydrasdr.so.PACKAGE_VERSION_PLACEHOLDER %{buildroot}%{_libdir}/
+        ln -sf libhydrasdr.so.PACKAGE_VERSION_PLACEHOLDER %{buildroot}%{_libdir}/libhydrasdr.so.1
+        ln -sf libhydrasdr.so.1 %{buildroot}%{_libdir}/libhydrasdr.so
+
+        # Install binaries
+        install -m755 hydrasdr_* %{buildroot}%{_bindir}/
+
+        # Install udev rules
+        install -m644 51-hydrasdr.rules %{buildroot}/etc/udev/rules.d/
+
+        %files
+        %{_libdir}/libhydrasdr.so
+        %{_libdir}/libhydrasdr.so.1
+        %{_libdir}/libhydrasdr.so.PACKAGE_VERSION_PLACEHOLDER
+        %{_bindir}/hydrasdr_*
+        /etc/udev/rules.d/51-hydrasdr.rules
+
+        %post
+        /sbin/ldconfig
+        udevadm control --reload-rules 2>/dev/null || true
+        udevadm trigger 2>/dev/null || true
+
+        %postun
+        /sbin/ldconfig
+        SPEC_EOF
+
+        # Replace placeholders in spec file
+        sed -i "s/PACKAGE_NAME_PLACEHOLDER/${{ env.PACKAGE_NAME }}/g" ~/rpmbuild/SPECS/hydrasdr.spec
+        sed -i "s/PACKAGE_VERSION_PLACEHOLDER/${PACKAGE_VERSION}/g" ~/rpmbuild/SPECS/hydrasdr.spec
+
+        # Build RPM (use --define to ensure correct topdir for all distros including openSUSE)
+        rpmbuild -bb --define "_topdir $HOME/rpmbuild" ~/rpmbuild/SPECS/hydrasdr.spec
+
+        # Copy to current directory with distribution-specific name
+        RPM_FILE=$(find ~/rpmbuild/RPMS -name "*.rpm" -not -name "*debuginfo*" | head -1)
+        if [ -n "$RPM_FILE" ]; then
+          DIST_SPECIFIC_NAME="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${PACKAGE_VERSION}.rpm"
+          cp "$RPM_FILE" "${DIST_SPECIFIC_NAME}"
+          echo "Created .rpm package: ${DIST_SPECIFIC_NAME}"
+        fi
+
+    - name: Create .pkg.tar package (Arch)
       if: matrix.create_pkg == true
       shell: bash
       run: |
-        set -e
         PACKAGE_VERSION="${{ needs.extract-version.outputs.version }}"
-        
-        # Get absolute path to current directory
-        ORIGINAL_DIR=$(pwd)
-        echo "Original directory: $ORIGINAL_DIR"
-        echo "Build directory contents:"
-        ls -la "$ORIGINAL_DIR/build/libhydrasdr/src/" || echo "No libhydrasdr build directory"
-        ls -la "$ORIGINAL_DIR/build/hydrasdr-tools/src/" || echo "No hydrasdr-tools build directory"
-        
-        # Create non-root user for makepkg if it doesn't exist
-        if ! id -u builduser >/dev/null 2>&1; then
-          useradd -m -s /bin/bash builduser
-          echo "builduser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-        fi
-        
+
+        # Install patchelf to strip rpath
+        pacman -S --noconfirm patchelf || true
+
+        # Create staging directory with binaries
+        STAGING_DIR="staging"
+        mkdir -p "${STAGING_DIR}"
+        cp build/libhydrasdr/src/libhydrasdr.so* "${STAGING_DIR}/" 2>/dev/null || true
+        cp build/hydrasdr-tools/src/hydrasdr_* "${STAGING_DIR}/"
+        cp hydrasdr-tools/51-hydrasdr.rules "${STAGING_DIR}/"
+
+        # Strip rpath from binaries
+        for bin in "${STAGING_DIR}"/hydrasdr_*; do
+          if [ -f "$bin" ] && [ -x "$bin" ]; then
+            patchelf --remove-rpath "$bin" 2>/dev/null || true
+          fi
+        done
+        for lib in "${STAGING_DIR}"/libhydrasdr.so*; do
+          if [ -f "$lib" ]; then
+            patchelf --remove-rpath "$lib" 2>/dev/null || true
+          fi
+        done
+
         # Create package directory
-        mkdir -p /tmp/pkg/${{ env.PACKAGE_NAME }}
-        cd /tmp/pkg/${{ env.PACKAGE_NAME }}
-        
-        # Create PKGBUILD file
-        cat > PKGBUILD << 'EOF'
-        # Maintainer: ${{ env.MAINTAINER }}
-        pkgname=${{ env.PACKAGE_NAME }}
-        pkgver={{ PACKAGE_VERSION }}
+        PKG_DIR="pkg_build"
+        mkdir -p "${PKG_DIR}"
+
+        # Copy staging files to pkg_build
+        cp -a "${STAGING_DIR}"/* "${PKG_DIR}/"
+
+        cd "${PKG_DIR}"
+
+        # Create PKGBUILD that uses local files
+        cat > PKGBUILD << 'PKGBUILD_EOF'
+        pkgname=hydrasdr-host-tools
+        pkgver=PACKAGE_VERSION_PLACEHOLDER
         pkgrel=1
-        pkgdesc="HydraSDR Software Defined Radio Host Tools  and Libraries"
+        pkgdesc="HydraSDR Host Tools and Libraries"
         arch=('x86_64')
-        url="${{ env.HOMEPAGE }}"
-        license=('custom:HydraSDR')
-        depends=('libusb>=1.0.20')
-        
+        url="https://hydrasdr.com"
+        license=('custom')
+        depends=('libusb')
+
         package() {
-          # Create directory structure
+          cd "${startdir}"
           mkdir -p "${pkgdir}/usr/lib"
-          mkdir -p "${pkgdir}/usr/bin" 
+          mkdir -p "${pkgdir}/usr/bin"
           mkdir -p "${pkgdir}/etc/udev/rules.d"
-          mkdir -p "${pkgdir}/usr/share/licenses/${pkgname}"
-          
-          # Copy files from build directory (using absolute path from original location, use cp -a for symlinks)
-          cp -a {{ ORIGINAL_DIR }}/build/libhydrasdr/src/libhydrasdr.so* "${pkgdir}/usr/lib/" || true
-          cp {{ ORIGINAL_DIR }}/build/hydrasdr-tools/src/hydrasdr_* "${pkgdir}/usr/bin/"
-          cp {{ ORIGINAL_DIR }}/hydrasdr-tools/51-hydrasdr.rules "${pkgdir}/etc/udev/rules.d/51-hydrasdr.rules"
-          
-          # Create license file
-          cat > "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" << 'LICENSE_EOF'
-        HydraSDR Software Defined Radio Host Tools 
-        
-        Copyright (c) 2025, ${{ env.MAINTAINER }}
-        
-        This software is licensed exclusively for HydraSDR products and related development.
-        Unauthorized use, modification, or distribution for non-HydraSDR products is prohibited.
-        All rights reserved.
-        
-        For more information: ${{ env.HOMEPAGE }}
-        LICENSE_EOF
+
+          install -m644 libhydrasdr.so* "${pkgdir}/usr/lib/" 2>/dev/null || true
+          install -m755 hydrasdr_* "${pkgdir}/usr/bin/"
+          install -m644 51-hydrasdr.rules "${pkgdir}/etc/udev/rules.d/"
         }
-        EOF
-        
-        # Replace placeholders in PKGBUILD with absolute path
-        sed -i "s/{{ PACKAGE_VERSION }}/${PACKAGE_VERSION}/g" PKGBUILD
-        sed -i "s|{{ ORIGINAL_DIR }}|${ORIGINAL_DIR}|g" PKGBUILD
-        
-        # Debug: show the final PKGBUILD
-        echo "=== Final PKGBUILD ==="
-        cat PKGBUILD
-        echo "======================="
-        
-        # Set ownership and permissions
-        chown -R builduser:builduser /tmp/pkg
-        chmod -R 755 /tmp/pkg
-        
-        # Build the package as non-root user
-        sudo -u builduser makepkg --skipinteg --skippgpcheck --nodeps --noconfirm
-        
-        # Find and copy the built package (handle both .xz and .zst formats)
-        BUILT_PACKAGE=""
-        for ext in pkg.tar.zst pkg.tar.xz pkg.tar.gz; do
-          if ls *.$ext 1> /dev/null 2>&1; then
-            BUILT_PACKAGE=$(ls *.$ext | head -1)
-            break
-          fi
-        done
-        
-        if [ -z "$BUILT_PACKAGE" ]; then
-          echo "ERROR: No package file found. Available files:"
-          ls -la
-          exit 1
+        PKGBUILD_EOF
+
+        # Replace version placeholder
+        sed -i "s/PACKAGE_VERSION_PLACEHOLDER/${PACKAGE_VERSION}/" PKGBUILD
+
+        # Build package as non-root user
+        useradd -m builduser 2>/dev/null || true
+        chown -R builduser:builduser .
+        su builduser -c "makepkg -sf --noconfirm"
+
+        # Copy to parent directory with distribution-specific name
+        PKG_FILE=$(ls *.pkg.tar.* 2>/dev/null | head -1)
+        if [ -n "$PKG_FILE" ]; then
+          DIST_SPECIFIC_NAME="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${PACKAGE_VERSION}.pkg.tar.zst"
+          cp "$PKG_FILE" "../${DIST_SPECIFIC_NAME}"
+          echo "Created .pkg.tar package: ${DIST_SPECIFIC_NAME}"
         fi
-        
-        echo "Found package: $BUILT_PACKAGE"
-        
-        # Rename to distribution-specific name
-        # Extract the extension (e.g., pkg.tar.zst, pkg.tar.xz)
-        if [[ "$BUILT_PACKAGE" == *.pkg.tar.zst ]]; then
-          EXT="pkg.tar.zst"
-        elif [[ "$BUILT_PACKAGE" == *.pkg.tar.xz ]]; then
-          EXT="pkg.tar.xz"
-        elif [[ "$BUILT_PACKAGE" == *.pkg.tar.gz ]]; then
-          EXT="pkg.tar.gz"
-        else
-          EXT="pkg.tar.zst"  # Default fallback
-        fi
-        
-        DIST_SPECIFIC_NAME="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${PACKAGE_VERSION}.${EXT}"
-        mv "$BUILT_PACKAGE" "$DIST_SPECIFIC_NAME"
-        echo "Renamed $BUILT_PACKAGE to $DIST_SPECIFIC_NAME"
-        
-        cp "$DIST_SPECIFIC_NAME" "$ORIGINAL_DIR/"
-        
-        cd "$ORIGINAL_DIR"
-        
-        # Verify the renamed package
-        for pkg_file in ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.pkg.tar.*; do
-          if [ -f "$pkg_file" ]; then
-            echo "Created distribution-specific Arch package: $pkg_file"
-            tar -tf "$pkg_file" | head -20 || echo "Could not list package contents"
-            echo "Package size: $(du -h "$pkg_file")"
-            break
-          fi
-        done
+        cd ..
 
     - name: Test
       run: |
@@ -989,7 +1028,6 @@ jobs:
         build/hydrasdr-tools/src/hydrasdr_lib_version
         timeout 10s build/hydrasdr-tools/src/hydrasdr_info || echo "No HydraSDR hardware detected (normal in CI environment)"
 
-    # === Upload ===
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -1021,8 +1059,118 @@ jobs:
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.pkg.tar.*"
         retention-days: 30
 
+  # ubuntu-22.04-arm, ubuntu-24.04-arm and windows-11-arm are not supported yet for private repositories
+  build_arm64_native:
+    needs: extract-version
+    if: github.event.repository.visibility == 'public'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04-arm
+            name: "Ubuntu-22.04-LTS-ARM64"
+            run_benchmark: true
+          - os: ubuntu-24.04-arm
+            name: "Ubuntu-24.04-LTS-ARM64"
+            run_benchmark: true
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }} (Native)
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake pkg-config libusb-1.0-0-dev
+
+    - name: Configure build
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF
+
+    - name: Build
+      run: cmake --build build --config Release --parallel
+
+    - name: Package artifacts
+      run: |
+        ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
+        mkdir -p "$ARTIFACT_DIR"
+        cp -a build/libhydrasdr/src/libhydrasdr.so* "$ARTIFACT_DIR/" 2>/dev/null || true
+        cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/"
+
+    - name: Create .deb package
+      run: |
+        PACKAGE_VERSION="${{ needs.extract-version.outputs.version }}"
+        ARCH="arm64"
+        PACKAGE_DIR="${{ env.PACKAGE_NAME }}_${PACKAGE_VERSION}_${ARCH}"
+
+        mkdir -p "${PACKAGE_DIR}/DEBIAN"
+        mkdir -p "${PACKAGE_DIR}/usr/lib"
+        mkdir -p "${PACKAGE_DIR}/usr/bin"
+        mkdir -p "${PACKAGE_DIR}/etc/udev/rules.d"
+
+        cp -a build/libhydrasdr/src/libhydrasdr.so* "${PACKAGE_DIR}/usr/lib/" 2>/dev/null || true
+        cp build/hydrasdr-tools/src/hydrasdr_* "${PACKAGE_DIR}/usr/bin/"
+        cp hydrasdr-tools/51-hydrasdr.rules "${PACKAGE_DIR}/etc/udev/rules.d/"
+
+        cat > "${PACKAGE_DIR}/DEBIAN/control" << EOF
+        Package: ${{ env.PACKAGE_NAME }}
+        Version: ${PACKAGE_VERSION}
+        Section: electronics
+        Priority: optional
+        Architecture: ${ARCH}
+        Depends: libusb-1.0-0 (>= 1.0.20)
+        Maintainer: ${{ env.MAINTAINER }}
+        Homepage: ${{ env.HOMEPAGE }}
+        Description: HydraSDR Host Tools and Libraries (ARM64 Native)
+         Host tools and shared libraries for HydraSDR software-defined radio.
+         Built for: ${{ matrix.name }}
+        EOF
+
+        chmod 755 "${PACKAGE_DIR}/DEBIAN"
+        dpkg-deb --build "${PACKAGE_DIR}"
+        mv "${PACKAGE_DIR}.deb" "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${PACKAGE_VERSION}.deb"
+
+    - name: Run DDC Benchmark
+      if: matrix.run_benchmark == true
+      run: |
+        echo "=== DDC Benchmark Results (${{ matrix.name }} Native) ==="
+        echo "Architecture: $(uname -m)"
+        echo "CPU Info:"
+        cat /proc/cpuinfo | grep "model name" | head -1 || cat /proc/cpuinfo | grep "Model" | head -1
+        echo ""
+        build/hydrasdr-tools/src/hydrasdr_ddc_benchmark | tee benchmark_results.txt
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
+        path: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}/*
+
+    - name: Upload .deb package
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-deb
+        path: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}.deb
+
+    - name: Upload Benchmark Results
+      if: matrix.run_benchmark == true
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-${{ matrix.name }}
+        path: benchmark_results.txt
+        retention-days: 30
+
   create_full_archive:
-    needs: [extract-version, build, build_linux_distros]
+    needs: [extract-version, build, build_linux_distros, build_arm64_native, build_documentation]
+    # Run only if all builds succeeded or were skipped (not if any failed)
+    if: |
+      !cancelled() &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.build_linux_distros.result == 'success' || needs.build_linux_distros.result == 'skipped') &&
+      (needs.build_arm64_native.result == 'success' || needs.build_arm64_native.result == 'skipped') &&
+      (needs.build_documentation.result == 'success' || needs.build_documentation.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
     - name: Download All Builds
@@ -1030,19 +1178,35 @@ jobs:
 
     - name: Create platform-specific archives
       run: |
-        rm -rf hydrasdr_all
-        mkdir hydrasdr_all
+        rm -rf hydrasdr-host
+        mkdir hydrasdr-host
         
         # First, copy all native package files (now with distribution-specific names)
         echo "=== Copying native packages ==="
-        find . -name "${{ env.PACKAGE_NAME }}-*-v*.deb" -exec cp {} hydrasdr_all/ \;
-        find . -name "${{ env.PACKAGE_NAME }}-*-v*.rpm" -exec cp {} hydrasdr_all/ \;
-        find . -name "${{ env.PACKAGE_NAME }}-*-v*.pkg.tar.*" -exec cp {} hydrasdr_all/ \;
+        find . -name "${{ env.PACKAGE_NAME }}-*-v*.deb" -exec cp {} hydrasdr-host/ \;
+        find . -name "${{ env.PACKAGE_NAME }}-*-v*.rpm" -exec cp {} hydrasdr-host/ \;
+        find . -name "${{ env.PACKAGE_NAME }}-*-v*.pkg.tar.*" -exec cp {} hydrasdr-host/ \;
+        
+        # Create documentation archives from downloaded content
+        echo "=== Creating documentation archives ==="
+        DOC_DIR=$(find . -maxdepth 1 -type d -name "${{ env.PACKAGE_NAME }}-documentation-v*" | head -1)
+        if [ -n "$DOC_DIR" ] && [ -d "$DOC_DIR" ]; then
+          DOC_NAME=$(basename "$DOC_DIR")
+          echo "Found documentation directory: $DOC_NAME"
+          # Create .tar.gz archive (includes directory structure)
+          tar -czf "hydrasdr-host/${DOC_NAME}.tar.gz" "$DOC_NAME"
+          echo "Created: ${DOC_NAME}.tar.gz"
+          # Create .zip archive (includes directory structure)
+          zip -r "hydrasdr-host/${DOC_NAME}.zip" "$DOC_NAME"
+          echo "Created: ${DOC_NAME}.zip"
+        else
+          echo "Warning: Documentation directory not found"
+        fi
         
         # Count native packages
-        DEB_COUNT=$(find hydrasdr_all -name "*.deb" | wc -l)
-        RPM_COUNT=$(find hydrasdr_all -name "*.rpm" | wc -l)
-        PKG_COUNT=$(find hydrasdr_all -name "*.pkg.tar.*" | wc -l)
+        DEB_COUNT=$(find hydrasdr-host -name "*.deb" | wc -l)
+        RPM_COUNT=$(find hydrasdr-host -name "*.rpm" | wc -l)
+        PKG_COUNT=$(find hydrasdr-host -name "*.pkg.tar.*" | wc -l)
         
         echo "Found $DEB_COUNT .deb packages"
         echo "Found $RPM_COUNT .rpm packages"  
@@ -1058,19 +1222,25 @@ jobs:
               continue
             fi
             
+            # Skip documentation directory
+            if [[ "$dir" == *"-documentation-"* ]]; then
+              echo "Skipping documentation directory: $dir (already archived)"
+              continue
+            fi
+            
             echo "Processing directory: $dir"
             
             # Always create archives for Windows and macOS (no native packages)
             if [[ "$dir" == *"Windows"* ]]; then
               echo "Creating Windows ZIP: ${dir}.zip"
-              cd "$dir" && zip -r "../hydrasdr_all/${dir}.zip" . && cd ..
+              cd "$dir" && zip -r "../hydrasdr-host/${dir}.zip" . && cd ..
             elif [[ "$dir" == *"macOS"* ]]; then
               echo "Creating macOS archive: ${dir}.tar.gz"
-              tar -czf "hydrasdr_all/${dir}.tar.gz" -C "$dir" .
+              tar -czf "hydrasdr-host/${dir}.tar.gz" -C "$dir" .
             # Special case: Always create ZIP archives for Ubuntu 22.04 and 24.04 (required for firmware CI)
             elif [[ "$dir" == *"Ubuntu-22.04"* ]] || [[ "$dir" == *"Ubuntu-24.04"* ]]; then
               echo "Creating Ubuntu CI archive: ${dir}.zip (required for firmware workflow)"
-              cd "$dir" && zip -r "../hydrasdr_all/${dir}.zip" . && cd ..
+              cd "$dir" && zip -r "../hydrasdr-host/${dir}.zip" . && cd ..
             else
               # For other Linux distributions, only create archives if no native packages exist
               HAS_NATIVE_PACKAGE=false
@@ -1096,48 +1266,130 @@ jobs:
               # Create archive only if no native package exists
               if [ "$HAS_NATIVE_PACKAGE" = false ]; then
                 echo "Creating Linux archive: ${dir}.tar.gz"
-                tar -czf "hydrasdr_all/${dir}.tar.gz" -C "$dir" .
+                tar -czf "hydrasdr-host/${dir}.tar.gz" -C "$dir" .
               fi
             fi
           fi
         done
         
-        echo "=== Final contents of hydrasdr_all ==="
-        ls -la hydrasdr_all/
+        echo "=== Final contents of hydrasdr-host ==="
+        ls -la hydrasdr-host/
         
         # Show summary
         echo "=== Package Summary ==="
         echo "Native packages (preferred):"
-        echo "  - .deb files: $(find hydrasdr_all -name "*.deb" | wc -l)"
-        echo "  - .rpm files: $(find hydrasdr_all -name "*.rpm" | wc -l)"
-        echo "  - .pkg.tar.* files: $(find hydrasdr_all -name "*.pkg.tar.*" | wc -l)"
+        echo "  - .deb files: $(find hydrasdr-host -name "*.deb" | wc -l)"
+        echo "  - .rpm files: $(find hydrasdr-host -name "*.rpm" | wc -l)"
+        echo "  - .pkg.tar.* files: $(find hydrasdr-host -name "*.pkg.tar.*" | wc -l)"
+        echo "Documentation:"
+        echo "  - Documentation archives: $(find hydrasdr-host -name "*-documentation-*.tar.gz" -o -name "*-documentation-*.zip" | wc -l)"
         echo "CI/CD archives (required for firmware builds):"
-        echo "  - Ubuntu ZIP files: $(find hydrasdr_all -name "*Ubuntu*.zip" | wc -l)"
+        echo "  - Ubuntu ZIP files: $(find hydrasdr-host -name "*Ubuntu*.zip" | wc -l)"
         echo "Generic archives (fallback):"
-        echo "  - .tar.gz files: $(find hydrasdr_all -name "*.tar.gz" | wc -l)"
-        echo "  - .zip files: $(find hydrasdr_all -name "*.zip" | wc -l)"
+        echo "  - .tar.gz files: $(find hydrasdr-host -name "*.tar.gz" ! -name "*-documentation-*" | wc -l)"
+        echo "  - .zip files: $(find hydrasdr-host -name "*.zip" | wc -l)"
 
-    - name: Upload Full Archive
+    - name: Upload All Artifacts Archive
       uses: actions/upload-artifact@v4
       with:
-        name: hydrasdr_all
-        path: hydrasdr_all/*
+        name: ${{ env.PACKAGE_NAME }}-all-v${{ needs.extract-version.outputs.version }}
+        path: hydrasdr-host/*
 
   update_nightly_release:
-    needs: [extract-version, create_full_archive]
+    needs: [extract-version, create_full_archive, build]
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    # Run only if create_full_archive succeeded (which means all builds succeeded or were skipped)
+    if: |
+      !cancelled() &&
+      needs.create_full_archive.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-    - name: Download All Builds
+    - name: Download combined archive artifact
       uses: actions/download-artifact@v4
-      
+      with:
+        name: ${{ env.PACKAGE_NAME }}-all-v${{ needs.extract-version.outputs.version }}
+        path: release-assets
+
+    - name: Download benchmark artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: benchmark-*
+        path: benchmarks
+        merge-multiple: false
+      continue-on-error: true
+
+    - name: Aggregate benchmark results
+      run: |
+        VERSION="${{ needs.extract-version.outputs.version }}"
+        BENCHMARK_FILE="release-assets/DDC-Benchmark-Results-v${VERSION}.md"
+
+        echo "# HydraSDR DDC Benchmark Results" > "$BENCHMARK_FILE"
+        echo "" >> "$BENCHMARK_FILE"
+        echo "**Library Version:** ${VERSION}" >> "$BENCHMARK_FILE"
+        echo "**Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$BENCHMARK_FILE"
+        echo "**Commit:** ${{ github.sha }}" >> "$BENCHMARK_FILE"
+        echo "" >> "$BENCHMARK_FILE"
+        echo "---" >> "$BENCHMARK_FILE"
+        echo "" >> "$BENCHMARK_FILE"
+
+        # Process each benchmark result
+        FOUND_BENCHMARKS=false
+        if [ -d "benchmarks" ]; then
+          for dir in benchmarks/benchmark-*; do
+            if [ -d "$dir" ]; then
+              PLATFORM=$(basename "$dir" | sed 's/benchmark-//')
+              RESULT_FILE="$dir/benchmark_results.txt"
+
+              if [ -f "$RESULT_FILE" ]; then
+                FOUND_BENCHMARKS=true
+                echo "## ${PLATFORM}" >> "$BENCHMARK_FILE"
+                echo "" >> "$BENCHMARK_FILE"
+                echo '```' >> "$BENCHMARK_FILE"
+                cat "$RESULT_FILE" >> "$BENCHMARK_FILE"
+                echo '```' >> "$BENCHMARK_FILE"
+                echo "" >> "$BENCHMARK_FILE"
+                echo "---" >> "$BENCHMARK_FILE"
+                echo "" >> "$BENCHMARK_FILE"
+              fi
+            fi
+          done
+        fi
+
+        if [ "$FOUND_BENCHMARKS" = false ]; then
+          echo "No benchmark results found in this build." >> "$BENCHMARK_FILE"
+          echo "" >> "$BENCHMARK_FILE"
+          echo "Benchmarks are collected during CI builds for:" >> "$BENCHMARK_FILE"
+          echo "- Windows x64" >> "$BENCHMARK_FILE"
+          echo "- Linux x86_64 (Ubuntu 24.04)" >> "$BENCHMARK_FILE"
+          echo "- macOS ARM64 (Apple Silicon)" >> "$BENCHMARK_FILE"
+          echo "- macOS x86_64 (Intel)" >> "$BENCHMARK_FILE"
+        fi
+
+        echo "" >> "$BENCHMARK_FILE"
+        echo "---" >> "$BENCHMARK_FILE"
+        echo "" >> "$BENCHMARK_FILE"
+        echo "## Available Algorithms" >> "$BENCHMARK_FILE"
+        echo "" >> "$BENCHMARK_FILE"
+        echo "| Algorithm | Taps | Stopband Rejection | Best For |" >> "$BENCHMARK_FILE"
+        echo "|-----------|------|-------------------|----------|" >> "$BENCHMARK_FILE"
+        echo "| \`33_fast\` | 33 | ~62 dB | Real-time, low-latency |" >> "$BENCHMARK_FILE"
+        echo "| \`47_opt\` | 47 | ~63 dB | General purpose (default) |" >> "$BENCHMARK_FILE"
+        echo "| \`65_pow2\` | 65 | ~66 dB | Power-of-2 optimized FFT |" >> "$BENCHMARK_FILE"
+        echo "| \`83_highperf\` | 83 | >100 dB | Weak signals, high dynamic range |" >> "$BENCHMARK_FILE"
+        echo "| \`legacy\` | 47 | ~63 dB | Compatibility with original Airspy |" >> "$BENCHMARK_FILE"
+
+        echo "=== Generated benchmark summary ==="
+        cat "$BENCHMARK_FILE"
+
     - name: List downloaded artifacts
       run: |
         echo "Downloaded artifacts:"
         ls -la
-        echo "Contents of hydrasdr_all:"
-        ls -la hydrasdr_all/ || echo "hydrasdr_all directory not found"
-      
+        echo "Contents of release-assets:"
+        ls -la release-assets/ || echo "release-assets directory not found"
+        echo "Contents of benchmarks:"
+        ls -laR benchmarks/ || echo "benchmarks directory not found"
+
     - name: Create or Update Nightly Release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1145,17 +1397,20 @@ jobs:
         # Delete existing nightly release completely to ensure clean slate
         echo "Deleting existing nightly release..."
         gh release delete nightly -R ${{github.repository}} --yes || echo "Nightly release doesn't exist or already deleted"
-        
+
         # Create fresh nightly release
         echo "Creating fresh nightly release..."
         gh release create nightly -R ${{github.repository}} --title "Nightly Build" --notes "Automated nightly build from CI - Built from commit ${{ github.sha }}" --prerelease
-        
-        # Upload platform-specific archives from hydrasdr_all
-        if [ -d "hydrasdr_all" ] && [ "$(ls -A hydrasdr_all)" ]; then
+
+        # Upload platform-specific archives from release-assets
+        if [ -d "release-assets" ] && [ "$(ls -A release-assets)" ]; then
           echo "Uploading platform-specific archives..."
-          gh release upload nightly hydrasdr_all/* -R ${{github.repository}}
+          echo "Files to upload:"
+          ls -la release-assets/
+          gh release upload nightly release-assets/* -R ${{github.repository}}
         else
-          echo "No archive files found in hydrasdr_all directory"
+          echo "ERROR: No archive files found in release-assets directory"
+          exit 1
         fi
 
     - name: Update Release Notes
@@ -1171,14 +1426,22 @@ jobs:
 
         ## Available Builds:
 
+        ### Documentation:
+        - **API Documentation** (HTML + PDF) - Complete Doxygen-generated documentation for libhydrasdr
+          - Available in both .tar.gz (Linux/macOS) and .zip (Windows) formats
+          - Includes HTML documentation with interactive call graphs and source browsing
+          - Includes PDF reference manuals
+
         ### Desktop Platforms (Generic Archives):
         - **Windows x64** (.zip)
         - **macOS ARM64** (Apple Silicon M1/M2/M3) (.tar.gz)
         - **macOS x86_64** (Intel Macs) (.tar.gz)
+        - **Linux x86_64** (Ubuntu 24.04 LTS) - with DDC benchmark
+        - **Linux ARM64** (Ubuntu 22.04/24.04 LTS) - Native ARM64 runners with DDC benchmark
 
         ### GNU/Linux Distributions (Native Packages - Recommended):
-        
-        #### .deb packages (apt/dpkg):
+
+        #### .deb packages - x86_64/amd64 (apt/dpkg):
         - **Ubuntu 24.04 LTS** (Noble Numbat) - \`sudo dpkg -i\` *[.zip also available for CI/CD]*
         - **Ubuntu 22.04 LTS** (Jammy Jellyfish) - \`sudo dpkg -i\` *[.zip also available for CI/CD]*
         - **Ubuntu 20.04 LTS** (Focal Fossa) - \`sudo dpkg -i\`
@@ -1191,6 +1454,10 @@ jobs:
         - **Debian 12** (Bookworm) - \`sudo dpkg -i\`
         - **Debian 11** (Bullseye) - \`sudo dpkg -i\`
 
+        #### .deb packages - ARM64/aarch64 (apt/dpkg):
+        - **Ubuntu 22.04 LTS ARM64** - \`sudo dpkg -i\`
+        - **Ubuntu 24.04 LTS ARM64** - \`sudo dpkg -i\`
+
         #### .rpm packages (dnf/yum/zypper):
         - **Fedora 42** (Latest) - \`sudo dnf install\`
         - **Fedora 41** - \`sudo dnf install\`
@@ -1201,6 +1468,19 @@ jobs:
         - **Arch Linux** - \`sudo pacman -U\`
 
         ## Installation Instructions:
+
+        ### Documentation:
+        \`\`\`bash
+        # Download and extract documentation (choose .tar.gz or .zip)
+        wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-documentation-v${VERSION}.tar.gz
+        tar -xzf hydrasdr-host-tools-documentation-v${VERSION}.tar.gz
+
+        # Open HTML documentation in browser
+        # open libhydrasdr-html/index.html
+
+        # View PDF documentation with your preferred PDF reader
+        # libhydrasdr-documentation-v${VERSION}.pdf
+        \`\`\`
 
         ### Recommended: Native Packages (Automatic dependency management)
 
@@ -1251,10 +1531,25 @@ jobs:
         \`\`\`bash
         # Download the .pkg.tar.zst file
         # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Arch-Linux-v${VERSION}.pkg.tar.zst
-        
+
         # Install with pacman
         sudo pacman -U hydrasdr-host-tools-Arch-Linux-v[VERSION].pkg.tar.zst
-        
+
+        # Add your user to plugdev group for device access
+        sudo usermod -a -G plugdev \$USER
+        \`\`\`
+
+        #### ARM64 Linux (.deb packages):
+        \`\`\`bash
+        # For ARM64 systems (including Raspberry Pi 3/4/5 with 64-bit Ubuntu)
+
+        # Download the ARM64 .deb package (Ubuntu 24.04 or 22.04)
+        wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-ARM64-v${VERSION}.deb
+        sudo dpkg -i hydrasdr-host-tools-Ubuntu-24.04-LTS-ARM64-v${VERSION}.deb
+
+        # Fix any dependency issues if needed
+        sudo apt-get install -f
+
         # Add your user to plugdev group for device access
         sudo usermod -a -G plugdev \$USER
         \`\`\`
@@ -1312,15 +1607,24 @@ jobs:
 
         ## System Requirements:
         - **libusb 1.0.23** (avoid 1.0.24 due to known issues)
-        - **USB 2.0 or 3.0 port** for HydraSDR RFOne device
-        - **64-bit architecture** (amd64/x86_64)
+        - **USB 2.0 or 3.0 port** for HydraSDR software-defined radio device
+        - **64-bit architecture** (x86_64/amd64 or ARM64/aarch64)
+        - **Supported ARM64 platforms**: Raspberry Pi 3/4/5 (with 64-bit Ubuntu), Ampere, AWS Graviton
+
+        ## DDC Benchmark Results:
+        Benchmark results are collected during CI builds for performance tracking:
+        - **Windows x64** - Available in benchmark-Windows-x64 artifact
+        - **Linux x86_64** - Available in benchmark-Ubuntu-24.04-LTS-Noble-Numbat artifact
+        - **Linux ARM64** - Available in benchmark-Ubuntu-*-LTS-ARM64 artifacts
+        - **macOS ARM64** (Apple Silicon) - Available in benchmark-macOS-ARM64 artifact
+        - **macOS x86_64** (Intel) - Available in benchmark-macOS-x86_64 artifact
 
         ## Package Features:
-        - **Automatic dependency management** - Required libraries installed automatically  
-        - **System integration** - Proper udev rules for non-root device access  
-        - **Easy removal** - Standard package manager commands for clean uninstall  
-        - **Automatic updates** - Library cache and udev rules updated automatically  
-        - **Digital signatures** - All packages built in secure CI environment  
+        - **Automatic dependency management** - Required libraries installed automatically
+        - **System integration** - Proper udev rules for non-root device access
+        - **Easy removal** - Standard package manager commands for clean uninstall
+        - **Automatic updates** - Library cache and udev rules updated automatically
+        - **libhydrasdr API documentation** - Doxygen-generated HTML and PDF documentation with call graphs and source browsing  
 
         ## Comprehensive Distribution Coverage:
         This release provides native packages for **major GNU/Linux distributions** including all current LTS versions of Ubuntu, stable Debian releases, latest Fedora versions, and rolling-release distributions. 
@@ -1335,6 +1639,7 @@ jobs:
         - **Generic archives** provided for Windows, macOS, and unsupported Linux distributions
         - **Ubuntu ZIP archives** provided for CI/CD workflows (firmware builds)
         - **Native packages** handle dependencies, system integration, and updates automatically
+        - **API Documentation** included with complete Doxygen-generated reference for developers
         - **Nightly build** - This is an automated nightly build with latest features  
         - **Stable releases** - For stable releases, use tagged releases instead
         - **Issue reporting** - Report issues at https://github.com/${{github.repository}}/issues

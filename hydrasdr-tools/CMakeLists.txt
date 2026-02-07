@@ -1,5 +1,5 @@
 # Copyright 2012 Jared Boone
-# Copyright 2013-2025 Benjamin Vernoux
+# Copyright 2013-2026 Benjamin Vernoux
 #
 # This file is part of HydraSDR (based on HackRF project).
 #
@@ -32,6 +32,14 @@ add_definitions(-D_FILE_OFFSET_BITS=64)
 if(MSVC)
   include_directories(getopt)
   add_definitions(/D _CRT_SECURE_NO_WARNINGS)
+  # Enable static runtime for both debug and release
+  foreach(flag_var
+      CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
+      CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO)
+    if(${flag_var} MATCHES "/MD")
+      string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
+    endif()
+  endforeach()
 else()
   add_definitions(-Wall)
 endif()
@@ -56,11 +64,20 @@ endif()
 
 add_subdirectory(src)
 
+# Build tests if BUILD_TESTS option is enabled (default: ON) and tests directory exists
+option(BUILD_TESTS "Build test executables and enable CTest" ON)
+if(BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+  # Enable CTest before adding tests subdirectory so tests are registered
+  include(CTest)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
 ########################################################################
 # Create uninstall target
 ########################################################################
 
-if(NOT hydrasdr_all_SOURCE_DIR)
+if(NOT hydrasdr-host_SOURCE_DIR)
 configure_file(
   ${PROJECT_SOURCE_DIR}/../cmake/cmake_uninstall.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
@@ -86,3 +103,28 @@ else (INSTALL_UDEV_RULES)
   message (STATUS "Udev rules not being installed.")
   message (STATUS "Install them with -DINSTALL_UDEV_RULES=ON")
 endif (INSTALL_UDEV_RULES)
+
+########################################################################
+# Install mingw64 runtime DLLs (so 'cmake --build . --target install' includes them)
+########################################################################
+# You can override it on the configure command line:
+#   -DMINGW_MSYS64_BIN_DIR="C:/msys64/mingw64/bin"
+set(MINGW_MSYS64_BIN_DIR "C:/msys64/mingw64/bin" CACHE PATH "MSYS2 MinGW64 bin directory (used to find runtime DLLs on MinGW builds)")
+
+if(WIN32 AND MINGW)
+  # Common runtime DLLs used by the built tools
+  set(_mingw_dlls
+    libusb-1.0.dll
+    libwinpthread-1.dll
+  )
+
+  foreach(_dll IN LISTS _mingw_dlls)
+    # prefer forward slashes for portability
+    set(_dll_path "${MINGW_MSYS64_BIN_DIR}/${_dll}")
+    if(EXISTS "${_dll_path}")
+      install(FILES "${_dll_path}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+    else()
+      message(WARNING "Mingw DLL ${_dll} not found at ${_dll_path}; it will not be installed.")
+    endif()
+  endforeach()
+endif()

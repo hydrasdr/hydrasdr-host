@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2025 Benjamin Vernoux <bvernoux@hydrasdr.com>
+ * Copyright 2013-2026 Benjamin Vernoux <bvernoux@hydrasdr.com>
  *
  * This file is part of HydraSDR (based on HackRF project).
  *
@@ -54,10 +54,6 @@ static void usage() {
 	printf("\t<command> -p 0 -n 12 -r # reads from port 0 pin number 12\n");
 	printf("\t<command> -r          # reads all pins on all ports\n");
 	printf("\t<command> -p 0 -n 10 -w 1 # writes port 0 pin number 10 with 1 decimal\n");
-	printf("\nHardware Info HydraSDR:\n");
-	printf("LED1(out): -p 0 -n 12 (0=OFF, 1=ON)\n");
-	printf("Enable R828D(out): -p 1 -n 7 (0=OFF, 1=ON)\n");
-	printf("Enable BiasT(out): -p 1 -n 13 (0=OFF, 1=ON)\n");
 }
 
 static struct option long_options[] = {
@@ -192,6 +188,22 @@ int main(int argc, char** argv) {
 	uint32_t serial_number_msb_val;
 	uint32_t serial_number_lsb_val;
 	int result;
+	hydrasdr_lib_version_t lib_version;
+	hydrasdr_device_info_t device_info;
+
+	/* Display library version and check compatibility */
+	hydrasdr_lib_version(&lib_version);
+	printf("HydraSDR GPIO Tool (libhydrasdr v%d.%d.%d)\n",
+	       lib_version.major_version, lib_version.minor_version, lib_version.revision);
+	{
+		uint32_t runtime_ver = HYDRASDR_MAKE_VERSION(lib_version.major_version,
+		                                              lib_version.minor_version,
+		                                              lib_version.revision);
+		uint32_t min_ver = HYDRASDR_MAKE_VERSION(1, 1, 0);
+		if (runtime_ver < min_ver) {
+			fprintf(stderr, "[WARN] Library version too old: need v1.1.0+\n");
+		}
+	}
 
 	option_index = 0;
 	while( (opt = getopt_long(argc, argv,  "p:n:rw:s:", long_options, &option_index)) != EOF )
@@ -224,6 +236,28 @@ int main(int argc, char** argv) {
 			usage();
 			return EXIT_FAILURE;
 		}
+	}
+
+	/* Get device info and check GPIO capability */
+	result = hydrasdr_get_device_info(device, &device_info);
+	if (result != HYDRASDR_SUCCESS) {
+		fprintf(stderr, "hydrasdr_get_device_info() failed: %s (%d)\n",
+		        hydrasdr_error_name(result), result);
+		hydrasdr_close(device);
+		return EXIT_FAILURE;
+	}
+
+	printf("Device: %s (FW: %s)\n", device_info.board_name, device_info.firmware_version);
+
+	/* Check GPIO capability */
+	if (!(device_info.features & HYDRASDR_CAP_GPIO)) {
+		fprintf(stderr, "Error: GPIO control not supported on this device.\n");
+		hydrasdr_close(device);
+		return EXIT_FAILURE;
+	}
+
+	if (device_info.gpio_count > 0) {
+		printf("GPIO pins available: %u\n", device_info.gpio_count);
 	}
 
 	result = HYDRASDR_ERROR_OTHER;
