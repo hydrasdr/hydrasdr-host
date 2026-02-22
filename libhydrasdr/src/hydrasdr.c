@@ -265,6 +265,108 @@ static void hydrasdr_open_device(struct hydrasdr_device* device, int* ret, uint6
 	*ret = HYDRASDR_ERROR_NOT_FOUND;
 }
 
+/*
+ * Open a HydraSDR device from a file descriptor (Android USB host API).
+ * On Android, Java opens the USB device and passes the FD to native code.
+ * We use libusb_wrap_sys_device() to wrap the FD into a libusb handle,
+ * then claim the interface and look up the HAL from the device registry.
+ */
+static void hydrasdr_open_device_fd(struct hydrasdr_device* device, int* ret, int fd)
+{
+#ifdef __ANDROID__
+	int result;
+	struct libusb_device_descriptor desc;
+	const hydrasdr_device_entry_t *entry;
+	char fw_version[255 + 1];
+
+	/* Wrap the Java-provided FD into a libusb device handle */
+	result = libusb_wrap_sys_device(device->usb_context, (intptr_t)fd, &device->usb_handle);
+	if (result != 0 || device->usb_handle == NULL) {
+		device->usb_handle = NULL;
+		*ret = HYDRASDR_ERROR_LIBUSB;
+		return;
+	}
+
+	/* Detach kernel driver if active */
+	if (libusb_kernel_driver_active(device->usb_handle, 0)) {
+		libusb_detach_kernel_driver(device->usb_handle, 0);
+	}
+
+	/* Set configuration and claim interface */
+	result = libusb_set_configuration(device->usb_handle, 1);
+	if (result != 0) {
+		libusb_close(device->usb_handle);
+		device->usb_handle = NULL;
+		*ret = HYDRASDR_ERROR_LIBUSB;
+		return;
+	}
+
+	result = libusb_claim_interface(device->usb_handle, 0);
+	if (result != 0) {
+		libusb_close(device->usb_handle);
+		device->usb_handle = NULL;
+		*ret = HYDRASDR_ERROR_LIBUSB;
+		return;
+	}
+
+	/* Get device descriptor to determine VID/PID for HAL lookup */
+	if (libusb_get_device_descriptor(libusb_get_device(device->usb_handle), &desc) != 0) {
+		libusb_release_interface(device->usb_handle, 0);
+		libusb_close(device->usb_handle);
+		device->usb_handle = NULL;
+		*ret = HYDRASDR_ERROR_LIBUSB;
+		return;
+	}
+
+	/* Look up device in registry to attach the correct HAL */
+	entry = find_device_by_vid_pid(desc.idVendor, desc.idProduct);
+	if (!entry) {
+		libusb_release_interface(device->usb_handle, 0);
+		libusb_close(device->usb_handle);
+		device->usb_handle = NULL;
+		*ret = HYDRASDR_ERROR_NOT_FOUND;
+		return;
+	}
+	device->hal = entry->hal;
+
+	/* Verify firmware */
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4996)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+	result = hydrasdr_version_string_read(device, fw_version, 255);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+	if (result != HYDRASDR_SUCCESS) {
+		libusb_release_interface(device->usb_handle, 0);
+		libusb_close(device->usb_handle);
+		device->usb_handle = NULL;
+		*ret = result;
+		return;
+	}
+
+	if (strncmp(fw_version, HYDRASDR_EXPECTED_FW_PREFIX, HYDRASDR_EXPECTED_FW_PREFIX_LEN) != 0) {
+		libusb_release_interface(device->usb_handle, 0);
+		libusb_close(device->usb_handle);
+		device->usb_handle = NULL;
+		*ret = HYDRASDR_ERROR_NOT_FOUND;
+		return;
+	}
+
+	*ret = HYDRASDR_SUCCESS;
+#else
+	(void)device;
+	(void)fd;
+	*ret = HYDRASDR_ERROR_UNSUPPORTED;
+#endif
+}
+
 static int hydrasdr_open_init(struct hydrasdr_device** device, uint64_t serial_number, int fd)
 {
 	struct hydrasdr_device* lib_device;
@@ -293,8 +395,7 @@ static int hydrasdr_open_init(struct hydrasdr_device** device, uint64_t serial_n
 	if (fd == FILE_DESCRIPTOR_UNUSED) {
 		hydrasdr_open_device(lib_device, &result, serial_number);
 	} else {
-		// Android-specific opening logic not fully refactored, as it requires a different discovery path
-		result = HYDRASDR_ERROR_UNSUPPORTED; 
+		hydrasdr_open_device_fd(lib_device, &result, fd);
 	}
 
 	if (result != HYDRASDR_SUCCESS) {
