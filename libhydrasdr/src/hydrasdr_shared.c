@@ -1618,10 +1618,16 @@ int hydrasdr_generic_get_hardware_samplerate(struct hydrasdr_device* dev, uint32
 
 /*
  * Set decimation mode (LOW_BANDWIDTH or HIGH_DEFINITION)
+ *
+ * If a sample rate is already configured, re-apply it with the new mode
+ * so that the decimation pipeline is immediately reconfigured.
+ * On failure, the previous mode is restored for consistency.
  */
 int hydrasdr_generic_set_decimation_mode(struct hydrasdr_device* dev, uint32_t mode)
 {
 	hydrasdr_streaming_t* stream;
+	uint32_t prev_mode;
+	int result;
 
 	if (!dev || !dev->private_data) {
 		return HYDRASDR_ERROR_INVALID_PARAM;
@@ -1633,7 +1639,24 @@ int hydrasdr_generic_set_decimation_mode(struct hydrasdr_device* dev, uint32_t m
 	}
 
 	stream = (hydrasdr_streaming_t*)dev->private_data;
+	prev_mode = stream->decimation_mode;
+
+	if (mode == prev_mode) {
+		return HYDRASDR_SUCCESS;
+	}
+
 	stream->decimation_mode = mode;
+
+	/* Re-apply current sample rate with new mode */
+	if (stream->effective_samplerate > 0) {
+		result = hydrasdr_generic_set_samplerate(dev,
+						stream->effective_samplerate);
+		if (result != HYDRASDR_SUCCESS) {
+			stream->decimation_mode = prev_mode;
+			return result;
+		}
+	}
+
 	return HYDRASDR_SUCCESS;
 }
 
