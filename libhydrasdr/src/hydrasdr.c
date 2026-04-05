@@ -85,7 +85,7 @@ static const hydrasdr_device_entry_t hydrasdr_device_registry[] = {
  */
 static const hydrasdr_device_entry_t* find_device_by_vid_pid(uint16_t vid, uint16_t pid)
 {
-	for (int i = 0; i < HYDRASDR_DEVICE_REGISTRY_COUNT; i++) {
+	for (size_t i = 0; i < HYDRASDR_DEVICE_REGISTRY_COUNT; i++) {
 		if (hydrasdr_device_registry[i].vid == vid &&
 		    hydrasdr_device_registry[i].pid == pid) {
 			return &hydrasdr_device_registry[i];
@@ -100,7 +100,7 @@ static const hydrasdr_device_entry_t* find_device_by_vid_pid(uint16_t vid, uint1
  */
 static const hydrasdr_device_entry_t* find_device_by_board_id(enum hydrasdr_board_id board_id)
 {
-	for (int i = 0; i < HYDRASDR_DEVICE_REGISTRY_COUNT; i++) {
+	for (size_t i = 0; i < HYDRASDR_DEVICE_REGISTRY_COUNT; i++) {
 		if (hydrasdr_device_registry[i].board_id == board_id) {
 			return &hydrasdr_device_registry[i];
 		}

@@ -172,7 +172,7 @@ uint8_t conf_r82x[] =
 
 int configure_registers(struct hydrasdr_device* device)
 {
-	int i, j;
+	size_t i, j;
 	uint8_t register_number;
 	uint8_t register_value;
 	int result = HYDRASDR_SUCCESS;

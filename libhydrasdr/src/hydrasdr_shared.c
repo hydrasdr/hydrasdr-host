@@ -990,6 +990,7 @@ static int hydrasdr_create_io_threads(hydrasdr_streaming_t* stream, hydrasdr_sam
 {
 	int result;
 	pthread_attr_t attr;
+	(void)callback;
 
 	/* Note: streaming flag is already set by hydrasdr_start_streaming()
 	 * before USB transfers are submitted (to avoid race condition).
@@ -1505,7 +1506,7 @@ static int rate_compare_desc(const void *a, const void *b)
  */
 int hydrasdr_generic_build_virtual_samplerates(struct hydrasdr_device* dev)
 {
-	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
+	hydrasdr_streaming_t* stream;
 	uint32_t *temp_rates;
 	uint32_t temp_count = 0;
 	uint32_t max_rates;
@@ -1513,7 +1514,11 @@ int hydrasdr_generic_build_virtual_samplerates(struct hydrasdr_device* dev)
 	uint32_t unique_count;
 	static const uint32_t dec_factors[] = {1, 2, 4, 8, 16, 32, 64};
 
-	if (!dev || !stream) {
+	if (!dev) {
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+	stream = (hydrasdr_streaming_t*)dev->private_data;
+	if (!stream) {
 		return HYDRASDR_ERROR_INVALID_PARAM;
 	}
 
@@ -1896,7 +1901,9 @@ int hydrasdr_generic_set_samplerate(struct hydrasdr_device* dev, uint32_t sample
 		}
 
 		if (!found) {
-			return HYDRASDR_ERROR_INVALID_PARAM;
+			/* Let firmware decide (alt config rates) */
+			hw_rate = samplerate;
+			decimation = 1;
 		}
 	}
 
