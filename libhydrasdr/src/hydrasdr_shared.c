@@ -588,7 +588,7 @@ void hydrasdr_unpack_samples_reference(const uint16_t* input,
 
 /* USB transfer callback */
 
-static void hydrasdr_libusb_transfer_callback(struct libusb_transfer* usb_transfer)
+static void LIBUSB_CALL hydrasdr_libusb_transfer_callback(struct libusb_transfer* usb_transfer)
 {
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)usb_transfer->user_data;
 
