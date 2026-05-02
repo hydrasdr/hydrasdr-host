@@ -15,7 +15,7 @@ Package: libhydrasdr-dev
 Section: libdevel
 Architecture: any
 Pre-Depends: ${misc:Pre-Depends}
-Depends: libhydrasdr0 (= ${binary:Version}),
+Depends: libhydrasdr1 (= ${binary:Version}),
          libusb-1.0-0-dev,
          ${misc:Depends}
 Multi-Arch: same
@@ -26,7 +26,7 @@ Description: HydraSDR Host Tools and Libraries (Debian/Ubuntu)
  .
  This package contains development files.
 
-Package: libhydrasdr0
+Package: libhydrasdr1
 Section: libs
 Architecture: any
 Pre-Depends: ${misc:Pre-Depends}
@@ -44,7 +44,7 @@ Architecture: any
 Depends: ${misc:Depends},
  ${shlibs:Depends},
  libusb-1.0-0 (>= 1.0.20),
- libhydrasdr0 (= ${binary:Version}),
+ libhydrasdr1 (= ${binary:Version}),
 Description: HydraSDR Host Tools and Libraries (Debian/Ubuntu)
  Host tools and shared libraries for HydraSDR software-defined radio.
  Provides command-line utilities and development libraries for interfacing

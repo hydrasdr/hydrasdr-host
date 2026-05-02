@@ -1,3 +1,14 @@
+hydrasdr-host (1.1.1-1) unstable; urgency=medium
+
+  * Rename binary package libhydrasdr0 to libhydrasdr1 to match the
+    shared library SONAME (libhydrasdr.so.1, SOVERSION=1 since v1.0.4).
+    Fixes lintian package-name-doesnt-match-sonames warning.
+  * Update libhydrasdr-dev and hydrasdr-host Depends accordingly.
+  * Rename debian/libhydrasdr0.{install,dirs,udev} to libhydrasdr1.*
+    and update debian/rules.
+
+ -- Benjamin Vernoux <bvernoux@hydrasdr.com>  Sat, 02 May 2026 08:28:00 +0200
+
 hydrasdr-host (1.1.0-0) unstable; urgency=medium
 
   * New upstream master
