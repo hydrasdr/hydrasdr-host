@@ -274,6 +274,14 @@ static void print_device_capabilities(struct hydrasdr_device* device, int device
 			info.max_safe_temp_celsius,
 			info.max_safe_temp_fahrenheit);
 
+	/* ADC bit depth (reflects current/default sample rate) */
+	printf("\n=== ADC ===\n");
+	if (info.current_adc_bits != 0) {
+		printf("Bit depth: %u bits (at current sample rate)\n", info.current_adc_bits);
+	} else {
+		printf("Bit depth: unknown / not supported\n");
+	}
+
 	/* Display supported sample rates */
 	printf("\n=== Supported Sample Rates ===\n");
 	hydrasdr_get_samplerates(device, &count, 0);
