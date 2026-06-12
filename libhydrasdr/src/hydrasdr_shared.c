@@ -1104,10 +1104,15 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 	uint32_t fallback_caps)
 {
 	int result;
-	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)calloc(1, sizeof(hydrasdr_streaming_t));
+	/* hydrasdr_streaming_t carries OPT_ALIGN(OPT_CACHE_LINE_SIZE) members,
+	 * so plain malloc/calloc is not aligned enough (8 bytes on 32-bit
+	 * glibc) and compiler-emitted aligned SIMD stores fault. */
+	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)opt_aligned_alloc(
+		sizeof(hydrasdr_streaming_t), OPT_CACHE_LINE_SIZE);
 	if (!stream) {
 		return HYDRASDR_ERROR_NO_MEM;
 	}
+	memset(stream, 0, sizeof(*stream));
 
 	dev->private_data = stream;
 	stream->dev = dev;
@@ -1145,7 +1150,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 	if (stream->supported_samplerate_count > 0 && stream->supported_samplerate_count < MAX_SUPPORTED_RATE_COUNT) {
 		stream->supported_samplerates = (uint32_t *) malloc(stream->supported_samplerate_count * sizeof(uint32_t));
 		if (stream->supported_samplerates == NULL) {
-			free(stream);
+			opt_aligned_free(stream);
 			dev->private_data = NULL;
 			return HYDRASDR_ERROR_NO_MEM;
 		}
@@ -1160,7 +1165,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 
 		if (result < (int)(stream->supported_samplerate_count * sizeof(uint32_t))) {
 			free(stream->supported_samplerates);
-			free(stream);
+			opt_aligned_free(stream);
 			dev->private_data = NULL;
 			return HYDRASDR_ERROR_LIBUSB;
 		}
@@ -1187,7 +1192,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 		stream->supported_bandwidths = (uint32_t *) malloc(stream->supported_bandwidth_count * sizeof(uint32_t));
 		if (stream->supported_bandwidths == NULL) {
 			free(stream->supported_samplerates);
-			free(stream);
+			opt_aligned_free(stream);
 			dev->private_data = NULL;
 			return HYDRASDR_ERROR_NO_MEM;
 		}
@@ -1203,7 +1208,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 		if (result < (int)(stream->supported_bandwidth_count * sizeof(uint32_t))) {
 			free(stream->supported_bandwidths);
 			free(stream->supported_samplerates);
-			free(stream);
+			opt_aligned_free(stream);
 			dev->private_data = NULL;
 			return HYDRASDR_ERROR_LIBUSB;
 		}
@@ -1284,7 +1289,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 		hydrasdr_free_transfers(stream);
 		free(stream->supported_bandwidths);
 		free(stream->supported_samplerates);
-		free(stream);
+		opt_aligned_free(stream);
 		dev->private_data = NULL;
 		return result;
 	}
@@ -1301,7 +1306,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 		hydrasdr_free_transfers(stream);
 		free(stream->supported_bandwidths);
 		free(stream->supported_samplerates);
-		free(stream);
+		opt_aligned_free(stream);
 		dev->private_data = NULL;
 		return HYDRASDR_ERROR_NO_MEM;
 	}
@@ -1312,7 +1317,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 		hydrasdr_free_transfers(stream);
 		free(stream->supported_bandwidths);
 		free(stream->supported_samplerates);
-		free(stream);
+		opt_aligned_free(stream);
 		dev->private_data = NULL;
 		return HYDRASDR_ERROR_NO_MEM;
 	}
@@ -1359,7 +1364,7 @@ int hydrasdr_generic_cleanup_streaming(struct hydrasdr_device* dev)
 		free(stream->supported_samplerates);
 		free(stream->samplerate_info);
 		free(stream->virtual_samplerates);
-		free(stream);
+		opt_aligned_free(stream);
 		dev->private_data = NULL;
 	}
 	return HYDRASDR_SUCCESS;
