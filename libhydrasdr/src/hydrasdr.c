@@ -383,8 +383,11 @@ static int hydrasdr_open_init(struct hydrasdr_device** device, uint64_t serial_n
 	}
 
 #ifdef __ANDROID__
-	// LibUSB does not support device discovery on android
-	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
+	// LibUSB does not support device discovery on native Android,
+	// Termux provides support with a custom libusb package and termux-usb wrapper.
+	if (getenv("TERMUX_VERSION") == NULL) {
+		libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
+	}
 #endif
 
 	if (libusb_init(&lib_device->usb_context) != 0) {
@@ -442,7 +445,11 @@ ADDAPI int ADDCALL hydrasdr_list_devices(uint64_t *serials, int count)
 	int output_count = 0;
 
 #ifdef __ANDROID__
-	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
+	// LibUSB does not support device discovery on native Android,
+	// Termux provides support with a custom libusb package and termux-usb wrapper.
+	if (getenv("TERMUX_VERSION") == NULL) {
+		libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, NULL);
+	}
 #endif
 	if (libusb_init(&context) != 0) return HYDRASDR_ERROR_LIBUSB;
 
