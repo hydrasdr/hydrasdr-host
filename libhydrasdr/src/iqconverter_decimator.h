@@ -48,15 +48,15 @@ extern "C" {
 /* 33-tap halfband (for stages 0-2) - optimized pb=0.195 */
 #define DEC_HB33_TAPS      33   /* Total filter taps */
 #define DEC_HB33_SYM_PAIRS 8    /* Number of symmetric coefficient pairs */
-#define DEC_HB33_BUF_SIZE  32   /* Buffer size (power of 2) */
-#define DEC_HB33_BUF_MASK  31   /* Mask for branchless wrap */
+#define DEC_HB33_BUF_SIZE  64   /* Ring size (power of 2): 32-entry window plus an 8-sample batch */
+#define DEC_HB33_BUF_MASK  63   /* Mask for branchless wrap */
 #define DEC_HB33_DELAY     16   /* Group delay: (33-1)/2 samples */
 
 /* 17-tap halfband (for stages 3+) - low ripple pb=0.148 */
 #define DEC_HB17_TAPS      17   /* Total filter taps */
 #define DEC_HB17_SYM_PAIRS 4    /* Number of symmetric coefficient pairs */
-#define DEC_HB17_BUF_SIZE  16   /* Buffer size (power of 2) */
-#define DEC_HB17_BUF_MASK  15   /* Mask for branchless wrap */
+#define DEC_HB17_BUF_SIZE  32   /* Ring size (power of 2): 16-entry window plus a 4-sample batch */
+#define DEC_HB17_BUF_MASK  31   /* Mask for branchless wrap */
 #define DEC_HB17_DELAY     8    /* Group delay: (17-1)/2 samples */
 
 /* Stage threshold for 17-tap filter (stages >= this use 17-tap) */
@@ -131,8 +131,8 @@ typedef struct {
 	float *queue_iq;        /* Interleaved I/Q buffer (mirrored, 2x size) */
 	int fir_index;          /* Circular buffer write index */
 	int taps;               /* Total filter taps (33 or 17) */
-	int buf_size;           /* Buffer size (32 or 16) */
-	int buf_mask;           /* Mask for branchless wrap (31 or 15) */
+	int buf_size;           /* Ring size (64 or 32) */
+	int buf_mask;           /* Mask for branchless wrap (63 or 31) */
 	int filter_type;        /* DEC_FILTER_33TAP or DEC_FILTER_17TAP */
 } dec_stage_float_t;
 
@@ -146,11 +146,11 @@ typedef struct {
  * Fixed-point arithmetic:
  *   - Coefficients: Q15 format (scaled by 32768)
  *   - Accumulators: 32-bit (safe from overflow)
- *   - Output shift: >> 14 (intentional 2x gain for SNR preservation)
+ *   - Output shift: >> 15 rounded half up, unity gain per stage
  *
- * The >> 14 shift converts decimation SNR gain (+3 dB per stage) into
- * amplitude, providing +0.5 effective bits per decimation stage.
- * Requires AGC to limit input headroom based on decimation factor.
+ * Every stage, the base converter and the float path agree on level, so
+ * an int16 output at any decimation is the input's level and no AGC
+ * headroom has to be reserved for the decimation factor.
  *
  * Stages 0-2 use 33-tap filter (8 MACs, ~62 dB rejection).
  * Stages 3+ use 17-tap filter (4 MACs, ~59 dB rejection).
@@ -159,8 +159,8 @@ typedef struct {
 	int16_t *queue_iq;      /* Interleaved I/Q buffer (mirrored, 2x size) */
 	int fir_index;          /* Circular buffer write index */
 	int taps;               /* Total filter taps (33 or 17) */
-	int buf_size;           /* Buffer size (32 or 16) */
-	int buf_mask;           /* Mask for branchless wrap (31 or 15) */
+	int buf_size;           /* Ring size (64 or 32) */
+	int buf_mask;           /* Mask for branchless wrap (63 or 31) */
 	int filter_type;        /* DEC_FILTER_33TAP or DEC_FILTER_17TAP */
 } dec_stage_int16_t;
 

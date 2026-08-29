@@ -18,7 +18,7 @@
  * INT16 SATURATION MACRO
  *
  * Clamps int32 accumulator result to int16 range [-32768, +32767].
- * Required because the 2x gain per stage can cause overflow with strong
+ * Required because the step response overshoots full scale (1.13x) on strong
  * signals when AGC is disabled.
  *
  * Uses branchless implementation for minimal performance impact:
@@ -30,6 +30,9 @@
 	((x) > 32767) ? (int16_t)32767 : \
 	(((x) < -32768) ? (int16_t)-32768 : (int16_t)(x)) \
 )
+
+/* Half LSB of the 15-bit output shift: a plain >> 15 truncates and leaves -0.5 LSB of DC per stage */
+#define DEC_ROUND (1 << 14)
 
 /* ========================================================================
  * STAGE PARAMETER LOOKUP
@@ -346,10 +349,9 @@ void dec_hb33_float_process(dec_stage_float_t *stage,
  *
  * Fixed-point arithmetic:
  *   - Coefficients: Q15 format (scaled by 32768, center tap = 16384)
- *   - Output shift: >> 14 (intentional 2x gain for SNR preservation)
- *   - Each 2x decimation provides +3 dB SNR = +0.5 effective bits
- *   - The >> 14 shift converts this SNR gain into amplitude
- *   - With 64x decimation: +3 bits effective resolution gained
+ *   - Output shift: >> 15 rounded half up, unity gain per stage like the
+ *     float stages and the base converter, so the level does not depend
+ *     on the decimation factor and a 64x chain keeps its input headroom
  *
  * Overflow considerations:
  *   - Int32 accumulator: safe (worst-case = 1.66B, max = 2.15B)
@@ -482,8 +484,8 @@ void dec_hb33_int16_process(dec_stage_int16_t *stage,
 		      + h13 * ((int32_t)s[27] + s[39])
 		      + h15 * ((int32_t)s[31] + s[35])
 		      + h16 * (int32_t)s[33];
-		dest[out_idx * 2 + 0] = SAT_I16(acc_i >> 14);
-		dest[out_idx * 2 + 1] = SAT_I16(acc_q >> 14);
+		dest[out_idx * 2 + 0] = SAT_I16((acc_i + DEC_ROUND) >> 15);
+		dest[out_idx * 2 + 1] = SAT_I16((acc_q + DEC_ROUND) >> 15);
 
 		/* Output 1 */
 		s = &q[(idx1 + buf_size - DEC_HB33_TAPS + 1) * 2];
@@ -505,8 +507,8 @@ void dec_hb33_int16_process(dec_stage_int16_t *stage,
 		      + h13 * ((int32_t)s[27] + s[39])
 		      + h15 * ((int32_t)s[31] + s[35])
 		      + h16 * (int32_t)s[33];
-		dest[out_idx * 2 + 2] = SAT_I16(acc_i >> 14);
-		dest[out_idx * 2 + 3] = SAT_I16(acc_q >> 14);
+		dest[out_idx * 2 + 2] = SAT_I16((acc_i + DEC_ROUND) >> 15);
+		dest[out_idx * 2 + 3] = SAT_I16((acc_q + DEC_ROUND) >> 15);
 
 		/* Output 2 */
 		s = &q[(idx2 + buf_size - DEC_HB33_TAPS + 1) * 2];
@@ -528,8 +530,8 @@ void dec_hb33_int16_process(dec_stage_int16_t *stage,
 		      + h13 * ((int32_t)s[27] + s[39])
 		      + h15 * ((int32_t)s[31] + s[35])
 		      + h16 * (int32_t)s[33];
-		dest[out_idx * 2 + 4] = SAT_I16(acc_i >> 14);
-		dest[out_idx * 2 + 5] = SAT_I16(acc_q >> 14);
+		dest[out_idx * 2 + 4] = SAT_I16((acc_i + DEC_ROUND) >> 15);
+		dest[out_idx * 2 + 5] = SAT_I16((acc_q + DEC_ROUND) >> 15);
 
 		/* Output 3 */
 		s = &q[(idx3 + buf_size - DEC_HB33_TAPS + 1) * 2];
@@ -551,8 +553,8 @@ void dec_hb33_int16_process(dec_stage_int16_t *stage,
 		      + h13 * ((int32_t)s[27] + s[39])
 		      + h15 * ((int32_t)s[31] + s[35])
 		      + h16 * (int32_t)s[33];
-		dest[out_idx * 2 + 6] = SAT_I16(acc_i >> 14);
-		dest[out_idx * 2 + 7] = SAT_I16(acc_q >> 14);
+		dest[out_idx * 2 + 6] = SAT_I16((acc_i + DEC_ROUND) >> 15);
+		dest[out_idx * 2 + 7] = SAT_I16((acc_q + DEC_ROUND) >> 15);
 
 		out_idx += 4;
 	}
@@ -688,7 +690,7 @@ void dec_hb17_float_process(dec_stage_float_t *stage,
  *
  * Fixed-point arithmetic:
  *   - Coefficients: Q15 format (scaled by 32768, center tap = 16384)
- *   - Output shift: >> 14 (intentional 2x gain for SNR preservation)
+ *   - Output shift: >> 15 rounded half up, unity gain; see the 33-tap comments
  *   - See 33-tap comments for detailed explanation
  * ======================================================================== */
 
@@ -767,8 +769,8 @@ void dec_hb17_int16_process(dec_stage_int16_t *stage,
 		      + h5 * ((int32_t)s[11] + s[23])
 		      + h7 * ((int32_t)s[15] + s[19])
 		      + h8 * (int32_t)s[17];
-		dest[out_idx * 2 + 0] = SAT_I16(acc_i >> 14);
-		dest[out_idx * 2 + 1] = SAT_I16(acc_q >> 14);
+		dest[out_idx * 2 + 0] = SAT_I16((acc_i + DEC_ROUND) >> 15);
+		dest[out_idx * 2 + 1] = SAT_I16((acc_q + DEC_ROUND) >> 15);
 
 		/* FIR for output 1 */
 		s = &q[(idx1 + buf_size - DEC_HB17_TAPS + 1) * 2];
@@ -782,8 +784,8 @@ void dec_hb17_int16_process(dec_stage_int16_t *stage,
 		      + h5 * ((int32_t)s[11] + s[23])
 		      + h7 * ((int32_t)s[15] + s[19])
 		      + h8 * (int32_t)s[17];
-		dest[out_idx * 2 + 2] = SAT_I16(acc_i >> 14);
-		dest[out_idx * 2 + 3] = SAT_I16(acc_q >> 14);
+		dest[out_idx * 2 + 2] = SAT_I16((acc_i + DEC_ROUND) >> 15);
+		dest[out_idx * 2 + 3] = SAT_I16((acc_q + DEC_ROUND) >> 15);
 
 		out_idx += 2;
 	}
