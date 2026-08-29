@@ -666,9 +666,14 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 	hydrasdr_transfer_t transfer;
 	void *current_output;
 
-	/* Set high thread priority for low-latency streaming (Windows only) */
+	/* Set high thread priority for low-latency streaming */
 #ifdef _WIN32
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#elif defined(__APPLE__)
+	/* Apple Silicon: keep this real-time streaming thread on the P-cores;
+	 * a default-QoS thread is eligible for the ~2x-slower efficiency cores,
+	 * which makes the streaming CPU load swing between and during runs. */
+	pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
 
 	/* Hybrid lock-free consumer loop:
@@ -884,9 +889,13 @@ static void* hydrasdr_transfer_threadproc(void* arg)
 	int error;
 	struct timeval timeout = { 0, TRANSFER_THREAD_TIMEOUT_US };
 
-	/* Set high thread priority for low-latency USB transfers (Windows only) */
+	/* Set high thread priority for low-latency USB transfers */
 #ifdef _WIN32
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#elif defined(__APPLE__)
+	/* Apple Silicon: keep this real-time USB thread on the P-cores; a
+	 * default-QoS thread is eligible for the ~2x-slower efficiency cores. */
+	pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
 
 	while (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming) &&
