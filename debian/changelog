@@ -1,3 +1,22 @@
+hydrasdr-host (1.1.2-1) unstable; urgency=medium
+
+  * libhydrasdr decimation stages (2x to 64x): fix the halfband ring
+    buffers, 32 and 16 entries for 33 and 17 taps, whose batched stores
+    overwrote the oldest history samples before the FIR read them. Every
+    signal in a decimated band had images half (and, for int16 at 2x to
+    8x, a quarter of) the output sample rate away, 43 to 57 dB below it.
+    The stages now match a direct convolution bit-exactly.
+  * Int16 stages: round the output shift instead of truncating it, which
+    removes a DC line of 0.5 LSB per stage (-71 dBc at 64x for a -6 dBFS
+    tone).
+  * Int16 stages: unity gain per stage (output shift 15 on the Q15 taps)
+    instead of 2x per stage. The int16 level at any decimation now
+    matches 1x and float32; clients that compensated the old +6 dB per
+    stage must drop that correction. Strong signals no longer clip at
+    high decimation (the old chain clipped above -36 dBFS at 64x).
+
+ -- Benjamin Vernoux <bvernoux@hydrasdr.com>  Sat, 29 Aug 2026 12:00:00 +0200
+
 hydrasdr-host (1.1.1-1) unstable; urgency=medium
 
   * Rename binary package libhydrasdr0 to libhydrasdr1 to match the
