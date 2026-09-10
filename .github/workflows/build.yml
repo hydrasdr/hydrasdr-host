@@ -32,7 +32,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Extract version
       id: version
       run: |
@@ -46,7 +46,7 @@ jobs:
     name: Generate Documentation
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Install documentation dependencies
       run: |
@@ -181,7 +181,7 @@ jobs:
         ls -la "${DOC_DIR}/"
 
     - name: Upload documentation artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-documentation-v${{ needs.extract-version.outputs.version }}
         path: ${{ env.PACKAGE_NAME }}-documentation-v${{ needs.extract-version.outputs.version }}/
@@ -243,7 +243,7 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # === Platform Dependencies ===
     - name: Install Linux dependencies
@@ -264,7 +264,7 @@ jobs:
     # === Windows Dependencies ===
     - name: Setup Windows build tools
       if: matrix.platform == 'windows'
-      uses: microsoft/setup-msbuild@v2
+      uses: microsoft/setup-msbuild@v3
 
     - name: Download Windows dependencies
       if: matrix.platform == 'windows'
@@ -597,7 +597,7 @@ jobs:
 
     - name: Upload Benchmark Results (Linux)
       if: matrix.platform == 'linux' && matrix.run_benchmark == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: benchmark-${{ matrix.name }}
         path: benchmark_results.txt
@@ -627,7 +627,7 @@ jobs:
 
     - name: Upload Benchmark Results (macOS)
       if: matrix.platform == 'macos' && matrix.run_benchmark == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: benchmark-${{ matrix.name }}
         path: benchmark_results.txt
@@ -658,7 +658,7 @@ jobs:
 
     - name: Upload Benchmark Results (Windows)
       if: matrix.platform == 'windows' && matrix.run_benchmark == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: benchmark-${{ matrix.name }}
         path: benchmark_results.txt
@@ -666,7 +666,7 @@ jobs:
 
     # === Upload ===
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
         path: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}/*
@@ -684,7 +684,7 @@ jobs:
 
     - name: Upload .deb package
       if: matrix.create_deb == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-deb
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.deb"
@@ -692,7 +692,7 @@ jobs:
 
     - name: Upload .rpm package
       if: matrix.create_rpm == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-rpm
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.rpm"
@@ -700,7 +700,7 @@ jobs:
 
     - name: Upload .pkg.tar package
       if: matrix.create_pkg == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-pkg
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.pkg.tar.*"
@@ -735,11 +735,6 @@ jobs:
             deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
           - container: "debian:bookworm"
             name: "Debian-12-Bookworm"
-            pkg_manager: "apt"
-            create_deb: true
-            deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
-          - container: "debian:bullseye"
-            name: "Debian-11-Bullseye"
             pkg_manager: "apt"
             create_deb: true
             deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
@@ -811,7 +806,7 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Install dependencies (apt)
       if: matrix.pkg_manager == 'apt'
@@ -1133,7 +1128,7 @@ jobs:
         timeout 10s build/hydrasdr-tools/src/hydrasdr_info || echo "No HydraSDR hardware detected (normal in CI environment)"
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
         path: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}/*
@@ -1141,7 +1136,7 @@ jobs:
 
     - name: Upload .deb package
       if: matrix.create_deb == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-deb
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.deb"
@@ -1149,7 +1144,7 @@ jobs:
 
     - name: Upload .rpm package
       if: matrix.create_rpm == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-rpm
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.rpm"
@@ -1157,7 +1152,7 @@ jobs:
 
     - name: Upload .pkg.tar package
       if: matrix.create_pkg == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-pkg
         path: "${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v*.pkg.tar.*"
@@ -1183,7 +1178,7 @@ jobs:
     name: ${{ matrix.name }} (Native)
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Install dependencies
       run: |
@@ -1247,20 +1242,20 @@ jobs:
         build/hydrasdr-tools/src/hydrasdr_ddc_benchmark | tee benchmark_results.txt
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
         path: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}/*
 
     - name: Upload .deb package
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}-deb
         path: ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}.deb
 
     - name: Upload Benchmark Results
       if: matrix.run_benchmark == true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: benchmark-${{ matrix.name }}
         path: benchmark_results.txt
@@ -1278,7 +1273,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Download All Builds
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
 
     - name: Create platform-specific archives
       run: |
@@ -1396,7 +1391,7 @@ jobs:
         echo "  - .zip files: $(find hydrasdr-host -name "*.zip" | wc -l)"
 
     - name: Upload All Artifacts Archive
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ env.PACKAGE_NAME }}-all-v${{ needs.extract-version.outputs.version }}
         path: hydrasdr-host/*
@@ -1411,13 +1406,13 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
     - name: Download combined archive artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: ${{ env.PACKAGE_NAME }}-all-v${{ needs.extract-version.outputs.version }}
         path: release-assets
 
     - name: Download benchmark artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: benchmark-*
         path: benchmarks
@@ -1558,7 +1553,6 @@ jobs:
         - **Linux Mint 21.1** (Vera) - \`sudo dpkg -i\`
         - **Debian 13** (Trixie) - \`sudo dpkg -i\`
         - **Debian 12** (Bookworm) - \`sudo dpkg -i\`
-        - **Debian 11** (Bullseye) - \`sudo dpkg -i\`
 
         #### .deb packages - ARM64/aarch64 (apt/dpkg):
         - **Ubuntu 22.04 LTS ARM64** - \`sudo dpkg -i\`
