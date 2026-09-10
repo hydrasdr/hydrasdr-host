@@ -130,8 +130,42 @@ if(MSVC)
     endif()
 
     set(LIBUSB_INCLUDE_DIR "${LIBUSB_DOWNLOAD_DIR}/include" CACHE PATH "libusb include directory" FORCE)
-    set(LIBUSB_LIBRARY "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/MS64/dll/libusb-1.0.lib" CACHE FILEPATH "libusb import library" FORCE)
-    set(LIBUSB_DLL "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/MS64/dll/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+    # The libusb release archive ships no MSVC ARM64 build, the VS20xx trees
+    # contain MS32 and MS64 only. For native ARM64 take the LLVM-MinGW ARM64
+    # DLL from the same archive and generate an MSVC import library from the
+    # bundled module definition file.
+    # ARM64EC keeps the x64 import library: an ARM64EC module imports from x64
+    # DLLs and libusb is I/O bound.
+    if(MSVC_C_ARCHITECTURE_ID STREQUAL "ARM64" OR CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
+      set(LIBUSB_ARM64_DIR "${LIBUSB_DOWNLOAD_DIR}/msvc-arm64")
+      set(LIBUSB_LIBRARY "${LIBUSB_ARM64_DIR}/libusb-1.0.lib" CACHE FILEPATH "libusb import library" FORCE)
+      set(LIBUSB_DLL "${LIBUSB_DOWNLOAD_DIR}/MinGW-llvm-aarch64/dll/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+
+      if(NOT EXISTS "${LIBUSB_LIBRARY}")
+        get_filename_component(_MSVC_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+        find_program(MSVC_LIB_TOOL NAMES lib.exe HINTS "${_MSVC_BIN_DIR}")
+        if(NOT MSVC_LIB_TOOL)
+          message(FATAL_ERROR "lib.exe not found, cannot generate the ARM64 libusb import library")
+        endif()
+
+        message(STATUS "Generating ARM64 libusb import library with ${MSVC_LIB_TOOL}")
+        file(MAKE_DIRECTORY "${LIBUSB_ARM64_DIR}")
+        execute_process(
+          COMMAND "${MSVC_LIB_TOOL}" /nologo /machine:ARM64
+                  "/def:${LIBUSB_DOWNLOAD_DIR}/libusb-1.0.def"
+                  "/out:${LIBUSB_LIBRARY}"
+          RESULT_VARIABLE LIBUSB_LIB_RESULT
+          OUTPUT_VARIABLE LIBUSB_LIB_OUTPUT
+          ERROR_VARIABLE LIBUSB_LIB_OUTPUT
+        )
+        if(NOT LIBUSB_LIB_RESULT EQUAL 0)
+          message(FATAL_ERROR "lib.exe failed to generate the ARM64 libusb import library: ${LIBUSB_LIB_OUTPUT}")
+        endif()
+      endif()
+    else()
+      set(LIBUSB_LIBRARY "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/MS64/dll/libusb-1.0.lib" CACHE FILEPATH "libusb import library" FORCE)
+      set(LIBUSB_DLL "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/MS64/dll/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+    endif()
 
     if(NOT EXISTS "${LIBUSB_INCLUDE_DIR}/libusb.h")
       message(FATAL_ERROR "libusb header not found at ${LIBUSB_INCLUDE_DIR}/libusb.h")
@@ -174,6 +208,18 @@ if(MSVC)
 
   message(STATUS "Downloading pthreads4w ${PTHREADS4W_VERSION}...")
   FetchContent_MakeAvailable(pthreads4w)
+
+  # pthreads4w context.h defines PTW32_PROGCTR instead of __PTW32_PROGCTR in
+  # its ARM/ARM64 branch, so pthread_cancel.c trips the "#error Module
+  # contains CPU-specific code". No-op on x86/x64.
+  file(READ "${pthreads4w_SOURCE_DIR}/context.h" PTW32_CONTEXT_H)
+  string(REPLACE "#define PTW32_PROGCTR(Context)"
+                 "#define  __PTW32_PROGCTR(Context)"
+                 PTW32_CONTEXT_H_FIXED "${PTW32_CONTEXT_H}")
+  if(NOT PTW32_CONTEXT_H STREQUAL PTW32_CONTEXT_H_FIXED)
+    file(WRITE "${pthreads4w_SOURCE_DIR}/context.h" "${PTW32_CONTEXT_H_FIXED}")
+    message(STATUS "pthreads4w: patched context.h __PTW32_PROGCTR for ARM/ARM64")
+  endif()
 
   # pthreads4w has its own CMakeLists.txt that creates pthreadVC3 and pthreadVC3-static targets
   # We'll use the static target

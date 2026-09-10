@@ -315,7 +315,11 @@ const cpu_features_t *cpu_features_detect(void)
 		while (ATOMIC_LOAD(&g_cpu_features_state) != 2) {
 			/* Spin-wait (acceptable for one-time initialization) */
 #if defined(_MSC_VER)
+#if defined(_M_ARM64)
+			__yield();
+#else
 			_mm_pause();
+#endif
 #elif defined(__GNUC__) || defined(__clang__)
 #if defined(__x86_64__) || defined(__i386__)
 			__builtin_ia32_pause();

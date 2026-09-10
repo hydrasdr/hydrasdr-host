@@ -119,14 +119,24 @@
 	#define OPT_PREFETCH_NTA(addr)   __builtin_prefetch((const void *)(addr), 0, 0)
 #elif defined(COMPILER_MSVC)
 	#include <intrin.h>
-	/* MSVC prefetch: _MM_HINT_T0=L1, _MM_HINT_T1=L2, _MM_HINT_T2=L3, _MM_HINT_NTA */
-	#define OPT_PREFETCH(addr, rw, locality) \
-		_mm_prefetch((const char *)(addr), (locality) == 3 ? _MM_HINT_T0 : \
-		                                   (locality) == 2 ? _MM_HINT_T1 : \
-		                                   (locality) == 1 ? _MM_HINT_T2 : _MM_HINT_NTA)
-	#define OPT_PREFETCH_READ(addr)  _mm_prefetch((const char *)(addr), _MM_HINT_T0)
-	#define OPT_PREFETCH_WRITE(addr) _mm_prefetch((const char *)(addr), _MM_HINT_T0)
-	#define OPT_PREFETCH_NTA(addr)   _mm_prefetch((const char *)(addr), _MM_HINT_NTA)
+	#if defined(_M_ARM64)
+		/* MSVC ARM64: _mm_prefetch is x86/x64 only, __prefetch is the ARM64
+		 * form. ARM64EC defines _M_X64 and keeps the x64 intrinsics, so it
+		 * takes the branch below. */
+		#define OPT_PREFETCH(addr, rw, locality) __prefetch((const void *)(addr))
+		#define OPT_PREFETCH_READ(addr)  __prefetch((const void *)(addr))
+		#define OPT_PREFETCH_WRITE(addr) __prefetch((const void *)(addr))
+		#define OPT_PREFETCH_NTA(addr)   __prefetch((const void *)(addr))
+	#else
+		/* MSVC prefetch: _MM_HINT_T0=L1, _MM_HINT_T1=L2, _MM_HINT_T2=L3, _MM_HINT_NTA */
+		#define OPT_PREFETCH(addr, rw, locality) \
+			_mm_prefetch((const char *)(addr), (locality) == 3 ? _MM_HINT_T0 : \
+			                                   (locality) == 2 ? _MM_HINT_T1 : \
+			                                   (locality) == 1 ? _MM_HINT_T2 : _MM_HINT_NTA)
+		#define OPT_PREFETCH_READ(addr)  _mm_prefetch((const char *)(addr), _MM_HINT_T0)
+		#define OPT_PREFETCH_WRITE(addr) _mm_prefetch((const char *)(addr), _MM_HINT_T0)
+		#define OPT_PREFETCH_NTA(addr)   _mm_prefetch((const char *)(addr), _MM_HINT_NTA)
+	#endif
 #else
 	#define OPT_PREFETCH(addr, rw, locality) ((void)0)
 	#define OPT_PREFETCH_READ(addr)  ((void)0)

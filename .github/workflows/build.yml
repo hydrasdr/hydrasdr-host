@@ -198,7 +198,32 @@ jobs:
           - os: windows-2022
             name: "Windows-x64"
             platform: "windows"
+            vs_arch: "x64"
+            vs_generator: "Visual Studio 17 2022"
+            libusb_lib: 'deps\libusb\VS2022\MS64\dll\libusb-1.0.lib'
+            libusb_dll: 'deps\libusb\VS2022\MS64\dll\libusb-1.0.dll'
             run_benchmark: true
+          # Native ARM64 runner, so the test and benchmark steps run on real
+          # ARM64 hardware instead of shipping a binary nothing ever executed.
+          # No generator is pinned: the windows-11-arm label is moving to the
+          # Visual Studio 2026 image, and CMake picks the newest one installed.
+          - os: windows-11-arm
+            name: "Windows-ARM64"
+            platform: "windows"
+            vs_arch: "ARM64"
+            vs_generator: ""
+            libusb_lib: 'deps\libusb\msvc-arm64\libusb-1.0.lib'
+            libusb_dll: 'deps\libusb\MinGW-llvm-aarch64\dll\libusb-1.0.dll'
+            run_benchmark: true
+          # ARM64EC runs on ARM64 only, so cross compiled here and not tested
+          - os: windows-2022
+            name: "Windows-ARM64EC"
+            platform: "windows"
+            vs_arch: "ARM64EC"
+            vs_generator: "Visual Studio 17 2022"
+            libusb_lib: 'deps\libusb\VS2022\MS64\dll\libusb-1.0.lib'
+            libusb_dll: 'deps\libusb\VS2022\MS64\dll\libusb-1.0.dll'
+            run_benchmark: false
           - os: ubuntu-24.04
             name: "Ubuntu-24.04-LTS-Noble-Numbat"
             platform: "linux"
@@ -260,6 +285,25 @@ jobs:
         Copy-Item "$($prebuilt.FullName)\*" -Destination "deps\pthreads" -Recurse -Force
         Remove-Item "temp" -Recurse -Force
 
+    - name: Generate ARM64 libusb import library
+      if: matrix.vs_arch == 'ARM64'
+      shell: powershell
+      run: |
+        # The libusb release archive ships no MSVC ARM64 import library, only
+        # MS32 and MS64. Build one from the module definition file in the
+        # archive, it pairs with the LLVM-MinGW ARM64 DLL.
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = & $vswhere -latest -products * -property installationPath
+        # On the native ARM64 runner the tools are under Hostarm64\arm64
+        $hostDir = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "Hostarm64\arm64" } else { "Hostx64\x64" }
+        $libExe = Get-ChildItem "$vsPath\VC\Tools\MSVC\*\bin\$hostDir\lib.exe" | Select-Object -Last 1
+        if (-not $libExe) { throw "lib.exe not found under $vsPath" }
+        New-Item -ItemType Directory -Path "deps\libusb\msvc-arm64" -Force
+        & $libExe.FullName /nologo /machine:ARM64 `
+          "/def:deps\libusb\libusb-1.0.def" `
+          "/out:deps\libusb\msvc-arm64\libusb-1.0.lib"
+        if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with exit code $LASTEXITCODE" }
+
     # === Build Configuration ===
     - name: Configure build (Linux)
       if: matrix.platform == 'linux'
@@ -277,12 +321,27 @@ jobs:
 
     - name: Configure build (Windows)
       if: matrix.platform == 'windows'
+      shell: powershell
       run: |
-        cmake -B build -G "Visual Studio 17 2022" -A x64 `
-          -DLIBUSB_INCLUDE_DIR="$PWD\deps\libusb\include" `
-          -DLIBUSB_LIBRARIES="$PWD\deps\libusb\VS2022\MS64\dll\libusb-1.0.lib" `
-          -DTHREADS_PTHREADS_INCLUDE_DIR="$PWD\deps\pthreads\include" `
-          -DTHREADS_PTHREADS_WIN32_LIBRARY="$PWD\deps\pthreads\lib\x64\pthreadVC2.lib"
+        $cmakeArgs = @("-B", "build")
+        # Empty on the ARM64 image, where CMake selects the newest Visual
+        # Studio installed rather than a version this file has to track.
+        if ("${{ matrix.vs_generator }}" -ne "") {
+          $cmakeArgs += @("-G", "${{ matrix.vs_generator }}")
+        }
+        $cmakeArgs += @(
+          "-A", "${{ matrix.vs_arch }}",
+          "-DLIBUSB_INCLUDE_DIR=$PWD\deps\libusb\include",
+          "-DLIBUSB_LIBRARIES=$PWD\${{ matrix.libusb_lib }}",
+          "-DLIBUSB_DLL=$PWD\${{ matrix.libusb_dll }}"
+        )
+        # The prebuilt pthreads-win32 import library is x64 only. Other
+        # architectures fall back to the pthreads4w static build.
+        if ("${{ matrix.vs_arch }}" -eq "x64") {
+          $cmakeArgs += "-DTHREADS_PTHREADS_INCLUDE_DIR=$PWD\deps\pthreads\include"
+          $cmakeArgs += "-DTHREADS_PTHREADS_WIN32_LIBRARY=$PWD\deps\pthreads\lib\x64\pthreadVC2.lib"
+        }
+        cmake @cmakeArgs
 
     # === Build ===
     - name: Build (Linux/macOS)
@@ -312,10 +371,55 @@ jobs:
     - name: Package artifacts (macOS)
       if: matrix.platform == 'macos'
       run: |
+        set -e
         ARTIFACT_DIR="${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}"
         mkdir -p "$ARTIFACT_DIR"
-        cp -a build/libhydrasdr/src/libhydrasdr*.dylib "$ARTIFACT_DIR/" 2>/dev/null || true
         cp build/hydrasdr-tools/src/hydrasdr_* "$ARTIFACT_DIR/" 2>/dev/null || true
+
+        # Ship one real dylib, under the install name the tools link against.
+        # That name is a symlink in the build tree and actions/upload-artifact
+        # resolves symlinks, which would ship three identical copies.
+        SONAME=""
+        if [ -f build/libhydrasdr/src/libhydrasdr.dylib ]; then
+          SONAME=$(basename "$(otool -D build/libhydrasdr/src/libhydrasdr.dylib | tail -1)")
+          cp -L "build/libhydrasdr/src/$SONAME" "$ARTIFACT_DIR/$SONAME"
+        fi
+
+        cd "$ARTIFACT_DIR"
+        chmod 755 hydrasdr_* 2>/dev/null || true
+
+        if [ -n "$SONAME" ]; then
+          # The library links libusb by absolute Homebrew path, which does not
+          # exist on a Mac without Homebrew and differs between Intel and ARM.
+          LIBUSB_REF=$(otool -L "$SONAME" | awk '/libusb-1\.0\.0\.dylib/ {print $1; exit}')
+          if [ -n "$LIBUSB_REF" ] && [ -f "$LIBUSB_REF" ]; then
+            cp -L "$LIBUSB_REF" libusb-1.0.0.dylib
+            chmod 755 libusb-1.0.0.dylib
+            install_name_tool -id @rpath/libusb-1.0.0.dylib libusb-1.0.0.dylib
+            install_name_tool -change "$LIBUSB_REF" @rpath/libusb-1.0.0.dylib "$SONAME"
+          fi
+          chmod 755 "$SONAME"
+          install_name_tool -id "@rpath/$SONAME" "$SONAME"
+          # Make @loader_path the ONLY rpath, so every binary loads the copy
+          # sitting next to it. The build leaves /usr/local/lib, which on a Mac
+          # with nothing installed finds nothing, and on a Mac with an older
+          # libhydrasdr installed silently wins over the bundled one because
+          # -add_rpath appends. The dylib needs it too, for its own @rpath/libusb.
+          for t in hydrasdr_* ./*.dylib; do
+            for r in $(otool -l "$t" | awk '/LC_RPATH/{f=1} f && / path /{print $2; f=0}'); do
+              install_name_tool -delete_rpath "$r" "$t"
+            done
+            install_name_tool -add_rpath @loader_path "$t"
+          done
+          # install_name_tool invalidates the signature, and an arm64 binary
+          # with a broken signature is killed on launch.
+          codesign -f -s - ./*.dylib hydrasdr_*
+        fi
+
+        echo "=== packaged macOS tools ==="
+        ls -l
+        otool -L hydrasdr_spiflash
+        otool -l hydrasdr_spiflash | grep -A2 LC_RPATH
 
     - name: Package artifacts (Windows)
       if: matrix.platform == 'windows'
@@ -334,7 +438,7 @@ jobs:
 
         # Copy required DLLs (fail if missing)
         # Note: pthreads4w is statically linked, no DLL needed
-        Copy-Item "deps\libusb\VS2022\MS64\dll\libusb-1.0.dll" $dir -ErrorAction Stop
+        Copy-Item "${{ matrix.libusb_dll }}" $dir -ErrorAction Stop
 
         # Copy executables
         Copy-Item "build\hydrasdr-tools\src\Release\*.exe" $dir
@@ -530,7 +634,7 @@ jobs:
         retention-days: 30
 
     - name: Test (Windows)
-      if: matrix.platform == 'windows'
+      if: matrix.platform == 'windows' && matrix.vs_arch != 'ARM64EC'
       shell: cmd
       run: |
         cd ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
@@ -543,7 +647,7 @@ jobs:
       shell: cmd
       run: |
         echo === DDC Benchmark Results (${{ matrix.name }}) ===
-        echo Architecture: x64
+        echo Architecture: ${{ matrix.vs_arch }}
         echo.
         echo Running DDC benchmark...
         cd ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
@@ -1236,6 +1340,8 @@ jobs:
               cd "$dir" && zip -r "../hydrasdr-host/${dir}.zip" . && cd ..
             elif [[ "$dir" == *"macOS"* ]]; then
               echo "Creating macOS archive: ${dir}.tar.gz"
+              # actions/upload-artifact does not preserve the execute bit
+              chmod 755 "$dir"/hydrasdr_* "$dir"/*.dylib
               tar -czf "hydrasdr-host/${dir}.tar.gz" -C "$dir" .
             # Special case: Always create ZIP archives for Ubuntu 22.04 and 24.04 (required for firmware CI)
             elif [[ "$dir" == *"Ubuntu-22.04"* ]] || [[ "$dir" == *"Ubuntu-24.04"* ]]; then

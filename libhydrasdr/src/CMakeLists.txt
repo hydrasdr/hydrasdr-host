@@ -214,7 +214,10 @@ function(libhydrasdr_common_settings libtarget)
       $<$<CONFIG:Release>:/GL>
     )
     # Enable AVX for x64 builds (baseline for modern CPUs)
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    # ARM64 and ARM64EC are 64-bit but reject /arch:AVX
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND NOT MSVC_C_ARCHITECTURE_ID MATCHES "ARM"
+       AND NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM")
       target_compile_options(${libtarget} PRIVATE
         $<$<CONFIG:Release>:/arch:AVX>
       )
