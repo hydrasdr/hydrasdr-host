@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.10)
 ########################################################################
 # Dependency Versions (used by FetchContent for MSVC builds)
 ########################################################################
-set(LIBUSB_VERSION "1.0.29")
+set(LIBUSB_VERSION "1.0.30")
 set(PTHREADS4W_VERSION "3.0.0")
 
 # MSVC builds require CMake 3.18+ for:
@@ -130,42 +130,17 @@ if(MSVC)
     endif()
 
     set(LIBUSB_INCLUDE_DIR "${LIBUSB_DOWNLOAD_DIR}/include" CACHE PATH "libusb include directory" FORCE)
-    # The libusb release archive ships no MSVC ARM64 build, the VS20xx trees
-    # contain MS32 and MS64 only. For native ARM64 take the LLVM-MinGW ARM64
-    # DLL from the same archive and generate an MSVC import library from the
-    # bundled module definition file.
-    # ARM64EC keeps the x64 import library: an ARM64EC module imports from x64
-    # DLLs and libusb is I/O bound.
+    # The libusb 1.0.30 archive ships its MSVC ARM64 build only under the
+    # VS2025 tree, the older VS20xx trees contain MS32 and MS64.
+    # ARM64EC keeps the x64 import library: libusb ships no ARM64EC build and
+    # an ARM64EC module imports from x64 DLLs.
     if(MSVC_C_ARCHITECTURE_ID STREQUAL "ARM64" OR CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
-      set(LIBUSB_ARM64_DIR "${LIBUSB_DOWNLOAD_DIR}/msvc-arm64")
-      set(LIBUSB_LIBRARY "${LIBUSB_ARM64_DIR}/libusb-1.0.lib" CACHE FILEPATH "libusb import library" FORCE)
-      set(LIBUSB_DLL "${LIBUSB_DOWNLOAD_DIR}/MinGW-llvm-aarch64/dll/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
-
-      if(NOT EXISTS "${LIBUSB_LIBRARY}")
-        get_filename_component(_MSVC_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
-        find_program(MSVC_LIB_TOOL NAMES lib.exe HINTS "${_MSVC_BIN_DIR}")
-        if(NOT MSVC_LIB_TOOL)
-          message(FATAL_ERROR "lib.exe not found, cannot generate the ARM64 libusb import library")
-        endif()
-
-        message(STATUS "Generating ARM64 libusb import library with ${MSVC_LIB_TOOL}")
-        file(MAKE_DIRECTORY "${LIBUSB_ARM64_DIR}")
-        execute_process(
-          COMMAND "${MSVC_LIB_TOOL}" /nologo /machine:ARM64
-                  "/def:${LIBUSB_DOWNLOAD_DIR}/libusb-1.0.def"
-                  "/out:${LIBUSB_LIBRARY}"
-          RESULT_VARIABLE LIBUSB_LIB_RESULT
-          OUTPUT_VARIABLE LIBUSB_LIB_OUTPUT
-          ERROR_VARIABLE LIBUSB_LIB_OUTPUT
-        )
-        if(NOT LIBUSB_LIB_RESULT EQUAL 0)
-          message(FATAL_ERROR "lib.exe failed to generate the ARM64 libusb import library: ${LIBUSB_LIB_OUTPUT}")
-        endif()
-      endif()
+      set(LIBUSB_VS_DIR "VS2025/ARM64")
     else()
-      set(LIBUSB_LIBRARY "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/MS64/dll/libusb-1.0.lib" CACHE FILEPATH "libusb import library" FORCE)
-      set(LIBUSB_DLL "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/MS64/dll/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
+      set(LIBUSB_VS_DIR "${LIBUSB_VS_DIR}/MS64")
     endif()
+    set(LIBUSB_LIBRARY "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/dll/libusb-1.0.lib" CACHE FILEPATH "libusb import library" FORCE)
+    set(LIBUSB_DLL "${LIBUSB_DOWNLOAD_DIR}/${LIBUSB_VS_DIR}/dll/libusb-1.0.dll" CACHE FILEPATH "libusb DLL" FORCE)
 
     if(NOT EXISTS "${LIBUSB_INCLUDE_DIR}/libusb.h")
       message(FATAL_ERROR "libusb header not found at ${LIBUSB_INCLUDE_DIR}/libusb.h")

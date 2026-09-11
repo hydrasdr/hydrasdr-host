@@ -476,8 +476,10 @@ static void hydrasdr_convert_samples_uint8(hydrasdr_streaming_t* stream, uint16_
  *   - Prefetch hints for streaming memory access pattern
  */
 
-/* Check for SSE2 support */
-#if defined(__SSE2__) || (defined(_MSC_VER) && (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)))
+/* Check for SSE2 support. ARM64EC defines _M_X64 but MSVC compiles x64
+ * intrinsics for it through the softintrin software emulation library
+ * instead of native SIMD instructions, so it takes the plain C loop. */
+#if defined(__SSE2__) || (defined(_MSC_VER) && !defined(_M_ARM64EC) && (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)))
 #define HYDRASDR_USE_SSE2 1
 #include <emmintrin.h>
 #endif

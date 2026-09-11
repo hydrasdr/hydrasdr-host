@@ -1,3 +1,18 @@
+hydrasdr-host (1.1.3-1) unstable; urgency=medium
+
+  * Windows ARM64 and ARM64EC support (MSVC builds).
+    The ARM64EC hydrasdr.dll is a drop-in for x64 applications running under
+    emulation on Windows 11 on ARM, keeping their x64 libusb-1.0.dll.
+  * MSVC builds download libusb 1.0.30.
+  * Linux zip archives: the tools now find the bundled libhydrasdr.so next
+    to them instead of requiring an installed copy.
+  * Packages: add Ubuntu 26.04 LTS (x86_64 and ARM64), Linux Mint 22.2 and
+    22.3, AlmaLinux 10, Fedora 43 and 44.
+    Drop the end-of-life Debian 11, Ubuntu 20.04, Fedora 41 and 42, and the
+    Ubuntu 22.04 ARM64 package.
+
+ -- Benjamin Vernoux <bvernoux@hydrasdr.com>  Fri, 11 Sep 2026 12:00:00 +0200
+
 hydrasdr-host (1.1.2-1) unstable; urgency=medium
 
   * libhydrasdr decimation stages (2x to 64x): fix the halfband ring

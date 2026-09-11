@@ -212,24 +212,28 @@ jobs:
             platform: "windows"
             vs_arch: "ARM64"
             vs_generator: ""
-            libusb_lib: 'deps\libusb\msvc-arm64\libusb-1.0.lib'
-            libusb_dll: 'deps\libusb\MinGW-llvm-aarch64\dll\libusb-1.0.dll'
+            libusb_lib: 'deps\libusb\VS2025\ARM64\dll\libusb-1.0.lib'
+            libusb_dll: 'deps\libusb\VS2025\ARM64\dll\libusb-1.0.dll'
             run_benchmark: true
-          # ARM64EC runs on ARM64 only, so cross compiled here and not tested
-          - os: windows-2022
+          # ARM64EC uses the x64 ABI, so x64 host applications running under
+          # emulation on Windows on ARM can load this DLL and run the DDC as
+          # native ARM64 code. It links the x64 libusb since libusb ships no
+          # ARM64EC build. The ARM64 runner executes ARM64EC binaries, so the
+          # test and benchmark steps run on it.
+          - os: windows-11-arm
             name: "Windows-ARM64EC"
             platform: "windows"
             vs_arch: "ARM64EC"
-            vs_generator: "Visual Studio 17 2022"
+            vs_generator: ""
             libusb_lib: 'deps\libusb\VS2022\MS64\dll\libusb-1.0.lib'
             libusb_dll: 'deps\libusb\VS2022\MS64\dll\libusb-1.0.dll'
-            run_benchmark: false
+            run_benchmark: true
           - os: ubuntu-24.04
             name: "Ubuntu-24.04-LTS-Noble-Numbat"
             platform: "linux"
             create_deb: true
             run_benchmark: true
-          - os: macos-14
+          - os: macos-15
             name: "macOS-ARM64"
             platform: "macos"
             arch: "arm64"
@@ -270,39 +274,12 @@ jobs:
       if: matrix.platform == 'windows'
       shell: powershell
       run: |
-        # Download dependencies (libusb 1.0.29 + pthreads-win32)
-        Invoke-WebRequest "https://github.com/libusb/libusb/releases/download/v1.0.29/libusb-1.0.29.7z" -OutFile "libusb.7z"
-        Invoke-WebRequest "https://gcc.gnu.org/pub/pthreads-win32/pthreads-w32-2-9-1-release.zip" -OutFile "pthreads.zip"
+        # Download libusb 1.0.30 pre-built binaries (pthreads4w is built from source by CMake)
+        Invoke-WebRequest "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.7z" -OutFile "libusb.7z"
 
         # Extract libusb using 7z (CMake's native extraction doesn't support all 7z codecs)
         New-Item -ItemType Directory -Path "deps\libusb" -Force
         7z x libusb.7z -o"deps\libusb"
-
-        # Extract pthreads
-        Expand-Archive pthreads.zip -DestinationPath "temp" -Force
-        $prebuilt = Get-ChildItem "temp" -Recurse -Directory | Where-Object { $_.Name -eq "Pre-built.2" }
-        New-Item -ItemType Directory -Path "deps\pthreads" -Force
-        Copy-Item "$($prebuilt.FullName)\*" -Destination "deps\pthreads" -Recurse -Force
-        Remove-Item "temp" -Recurse -Force
-
-    - name: Generate ARM64 libusb import library
-      if: matrix.vs_arch == 'ARM64'
-      shell: powershell
-      run: |
-        # The libusb release archive ships no MSVC ARM64 import library, only
-        # MS32 and MS64. Build one from the module definition file in the
-        # archive, it pairs with the LLVM-MinGW ARM64 DLL.
-        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $vsPath = & $vswhere -latest -products * -property installationPath
-        # On the native ARM64 runner the tools are under Hostarm64\arm64
-        $hostDir = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "Hostarm64\arm64" } else { "Hostx64\x64" }
-        $libExe = Get-ChildItem "$vsPath\VC\Tools\MSVC\*\bin\$hostDir\lib.exe" | Select-Object -Last 1
-        if (-not $libExe) { throw "lib.exe not found under $vsPath" }
-        New-Item -ItemType Directory -Path "deps\libusb\msvc-arm64" -Force
-        & $libExe.FullName /nologo /machine:ARM64 `
-          "/def:deps\libusb\libusb-1.0.def" `
-          "/out:deps\libusb\msvc-arm64\libusb-1.0.lib"
-        if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with exit code $LASTEXITCODE" }
 
     # === Build Configuration ===
     - name: Configure build (Linux)
@@ -335,12 +312,6 @@ jobs:
           "-DLIBUSB_LIBRARIES=$PWD\${{ matrix.libusb_lib }}",
           "-DLIBUSB_DLL=$PWD\${{ matrix.libusb_dll }}"
         )
-        # The prebuilt pthreads-win32 import library is x64 only. Other
-        # architectures fall back to the pthreads4w static build.
-        if ("${{ matrix.vs_arch }}" -eq "x64") {
-          $cmakeArgs += "-DTHREADS_PTHREADS_INCLUDE_DIR=$PWD\deps\pthreads\include"
-          $cmakeArgs += "-DTHREADS_PTHREADS_WIN32_LIBRARY=$PWD\deps\pthreads\lib\x64\pthreadVC2.lib"
-        }
         cmake @cmakeArgs
 
     # === Build ===
@@ -634,7 +605,7 @@ jobs:
         retention-days: 30
 
     - name: Test (Windows)
-      if: matrix.platform == 'windows' && matrix.vs_arch != 'ARM64EC'
+      if: matrix.platform == 'windows'
       shell: cmd
       run: |
         cd ${{ env.PACKAGE_NAME }}-${{ matrix.name }}-v${{ needs.extract-version.outputs.version }}
@@ -716,13 +687,13 @@ jobs:
       matrix:
         include:
           # Ubuntu LTS Versions
-          - container: "ubuntu:22.04"
-            name: "Ubuntu-22.04-LTS-Jammy-Jellyfish"
+          - container: "ubuntu:26.04"
+            name: "Ubuntu-26.04-LTS-Resolute-Raccoon"
             pkg_manager: "apt"
             create_deb: true
             deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
-          - container: "ubuntu:20.04"
-            name: "Ubuntu-20.04-LTS-Focal-Fossa"
+          - container: "ubuntu:22.04"
+            name: "Ubuntu-22.04-LTS-Jammy-Jellyfish"
             pkg_manager: "apt"
             create_deb: true
             deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
@@ -740,6 +711,18 @@ jobs:
             deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
           
           # Linux Mint (Ubuntu-based, use Ubuntu containers)
+          - container: "ubuntu:24.04"
+            name: "Linux-Mint-22.3-Zena"
+            pkg_manager: "apt"
+            create_deb: true
+            deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
+            mint_version: "22.3"
+          - container: "ubuntu:24.04"
+            name: "Linux-Mint-22.2-Zara"
+            pkg_manager: "apt"
+            create_deb: true
+            deps: "build-essential cmake pkg-config libusb-1.0-0-dev"
+            mint_version: "22.2"
           - container: "ubuntu:24.04"
             name: "Linux-Mint-22.1-Xia"
             pkg_manager: "apt"
@@ -772,18 +755,24 @@ jobs:
             mint_version: "21.1"
 
           # Fedora Latest Versions
-          - container: "fedora:42"
-            name: "Fedora-42"
+          - container: "fedora:44"
+            name: "Fedora-44"
             pkg_manager: "dnf"
             create_rpm: true
             deps: "gcc gcc-c++ cmake pkg-config libusb1-devel make rpm-build rpmdevtools tar gzip"
-          - container: "fedora:41"
-            name: "Fedora-41"
+          - container: "fedora:43"
+            name: "Fedora-43"
             pkg_manager: "dnf"
             create_rpm: true
             deps: "gcc gcc-c++ cmake pkg-config libusb1-devel make rpm-build rpmdevtools tar gzip"
 
           # Enterprise Linux
+          - container: "almalinux:10"
+            name: "AlmaLinux-10"
+            pkg_manager: "dnf"
+            create_rpm: true
+            deps: "gcc gcc-c++ cmake pkg-config libusb1-devel make epel-release rpm-build rpmdevtools"
+            enable_repos: true
           - container: "almalinux:9"
             name: "AlmaLinux-9"
             pkg_manager: "dnf"
@@ -1167,11 +1156,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04-arm
-            name: "Ubuntu-22.04-LTS-ARM64"
-            run_benchmark: true
           - os: ubuntu-24.04-arm
             name: "Ubuntu-24.04-LTS-ARM64"
+            run_benchmark: true
+          - os: ubuntu-26.04-arm
+            name: "Ubuntu-26.04-LTS-ARM64"
             run_benchmark: true
 
     runs-on: ${{ matrix.os }}
@@ -1339,7 +1328,7 @@ jobs:
               chmod 755 "$dir"/hydrasdr_* "$dir"/*.dylib
               tar -czf "hydrasdr-host/${dir}.tar.gz" -C "$dir" .
             # Special case: Always create ZIP archives for Ubuntu 22.04 and 24.04 (required for firmware CI)
-            elif [[ "$dir" == *"Ubuntu-22.04"* ]] || [[ "$dir" == *"Ubuntu-24.04"* ]]; then
+            elif [[ "$dir" == *"Ubuntu-22.04"* ]] || [[ "$dir" == *"Ubuntu-24.04"* ]] || [[ "$dir" == *"Ubuntu-26.04"* ]]; then
               echo "Creating Ubuntu CI archive: ${dir}.zip (required for firmware workflow)"
               cd "$dir" && zip -r "../hydrasdr-host/${dir}.zip" . && cd ..
             else
@@ -1461,7 +1450,10 @@ jobs:
           echo "" >> "$BENCHMARK_FILE"
           echo "Benchmarks are collected during CI builds for:" >> "$BENCHMARK_FILE"
           echo "- Windows x64" >> "$BENCHMARK_FILE"
+          echo "- Windows ARM64" >> "$BENCHMARK_FILE"
+          echo "- Windows ARM64EC" >> "$BENCHMARK_FILE"
           echo "- Linux x86_64 (Ubuntu 24.04)" >> "$BENCHMARK_FILE"
+          echo "- Linux ARM64 (Ubuntu 24.04/26.04)" >> "$BENCHMARK_FILE"
           echo "- macOS ARM64 (Apple Silicon)" >> "$BENCHMARK_FILE"
           echo "- macOS x86_64 (Intel)" >> "$BENCHMARK_FILE"
         fi
@@ -1534,18 +1526,22 @@ jobs:
           - Includes PDF reference manuals
 
         ### Desktop Platforms (Generic Archives):
-        - **Windows x64** (.zip)
-        - **macOS ARM64** (Apple Silicon M1/M2/M3) (.tar.gz)
-        - **macOS x86_64** (Intel Macs) (.tar.gz)
-        - **Linux x86_64** (Ubuntu 24.04 LTS) - with DDC benchmark
-        - **Linux ARM64** (Ubuntu 22.04/24.04 LTS) - Native ARM64 runners with DDC benchmark
+        - **Windows x64** (.zip) - also runs under emulation on Windows on ARM, see Windows ARM64EC below for native DDC speed in x64 applications
+        - **Windows ARM64** (.zip) - native build for ARM64 applications on Windows on ARM (Snapdragon X, ...), tested and benchmarked on an ARM64 runner
+        - **Windows ARM64EC** (.zip) - drop-in hydrasdr.dll for x64 applications (for example SDR++) running under emulation on Windows 11 on ARM, the DDC runs as native ARM64 code inside the x64 application
+        - **macOS ARM64** (Apple Silicon M1/M2/M3) (.tar.gz) - libusb bundled
+        - **macOS x86_64** (Intel Macs) (.tar.gz) - libusb bundled
+        - **Linux x86_64** (Ubuntu 24.04 LTS) (.zip) - with DDC benchmark
+        - **Linux ARM64** (Ubuntu 24.04/26.04 LTS) (.zip) - Native ARM64 runners with DDC benchmark
 
         ### GNU/Linux Distributions (Native Packages - Recommended):
 
         #### .deb packages - x86_64/amd64 (apt/dpkg):
+        - **Ubuntu 26.04 LTS** (Resolute Raccoon) - \`sudo dpkg -i\` *[.zip also available for CI/CD]*
         - **Ubuntu 24.04 LTS** (Noble Numbat) - \`sudo dpkg -i\` *[.zip also available for CI/CD]*
         - **Ubuntu 22.04 LTS** (Jammy Jellyfish) - \`sudo dpkg -i\` *[.zip also available for CI/CD]*
-        - **Ubuntu 20.04 LTS** (Focal Fossa) - \`sudo dpkg -i\`
+        - **Linux Mint 22.3** (Zena) - \`sudo dpkg -i\`
+        - **Linux Mint 22.2** (Zara) - \`sudo dpkg -i\`
         - **Linux Mint 22.1** (Xia) - \`sudo dpkg -i\`
         - **Linux Mint 22** (Wilma) - \`sudo dpkg -i\`
         - **Linux Mint 21.3** (Virginia) - \`sudo dpkg -i\`
@@ -1555,12 +1551,13 @@ jobs:
         - **Debian 12** (Bookworm) - \`sudo dpkg -i\`
 
         #### .deb packages - ARM64/aarch64 (apt/dpkg):
-        - **Ubuntu 22.04 LTS ARM64** - \`sudo dpkg -i\`
+        - **Ubuntu 26.04 LTS ARM64** - \`sudo dpkg -i\`
         - **Ubuntu 24.04 LTS ARM64** - \`sudo dpkg -i\`
 
         #### .rpm packages (dnf/yum/zypper):
-        - **Fedora 42** (Latest) - \`sudo dnf install\`
-        - **Fedora 41** - \`sudo dnf install\`
+        - **Fedora 44** (Latest) - \`sudo dnf install\`
+        - **Fedora 43** - \`sudo dnf install\`
+        - **AlmaLinux 10** - \`sudo dnf install\`
         - **AlmaLinux 9** - \`sudo dnf install\`
         - **openSUSE Tumbleweed** - \`sudo zypper install\`
 
@@ -1605,7 +1602,7 @@ jobs:
         \`\`\`bash
         # Download the appropriate .rpm file for your distribution
         # Examples:
-        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Fedora-42-v${VERSION}.rpm
+        # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Fedora-44-v${VERSION}.rpm
         # wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-AlmaLinux-9-v${VERSION}.rpm
         
         # Install with automatic dependency resolution
@@ -1643,7 +1640,7 @@ jobs:
         \`\`\`bash
         # For ARM64 systems (including Raspberry Pi 3/4/5 with 64-bit Ubuntu)
 
-        # Download the ARM64 .deb package (Ubuntu 24.04 or 22.04)
+        # Download the ARM64 .deb package (Ubuntu 26.04 or 24.04)
         wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-ARM64-v${VERSION}.deb
         sudo dpkg -i hydrasdr-host-tools-Ubuntu-24.04-LTS-ARM64-v${VERSION}.deb
 
@@ -1659,8 +1656,15 @@ jobs:
         #### Windows:
         \`\`\`powershell
         # Download and extract the .zip file
-        # All required DLLs are included in the package
+        # All required DLLs are included in the package (hydrasdr.dll, libusb-1.0.dll)
         # Add the extracted directory to your PATH environment variable
+        #
+        # Windows on ARM: a DLL must match the application that loads it.
+        # Native ARM64 applications use the Windows-ARM64 package.
+        # x64 applications (running under emulation) use the Windows-x64 package,
+        # or for native DDC speed on Windows 11 on ARM, replace the application's
+        # hydrasdr.dll with the one from the Windows-ARM64EC package and keep the
+        # application's x64 libusb-1.0.dll (there is no ARM64EC libusb build).
         \`\`\`
 
         #### macOS:
@@ -1669,11 +1673,9 @@ jobs:
         wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/[package-name].tar.gz
         tar -xzf [package-name].tar.gz
         
-        # Copy binaries to your PATH
+        # Copy the tools together with the bundled libhydrasdr and libusb dylibs,
+        # the tools locate both libraries next to the executable
         sudo cp [extracted-dir]/* /usr/local/bin/
-        
-        # Install dependencies via Homebrew
-        brew install libusb
         \`\`\`
 
         #### Other Linux Distributions (if no native package available):
@@ -1694,7 +1696,7 @@ jobs:
         \`\`\`
 
         ### For CI/CD Workflows:
-        Ubuntu 24.04 and 22.04 also provide .zip archives for automated workflows:
+        Ubuntu 26.04, 24.04 and 22.04 also provide .zip archives for automated workflows:
         \`\`\`bash
         # Download Ubuntu 24.04: .zip archive (for CI/CD)
         wget https://github.com/hydrasdr/hydrasdr-host/releases/download/nightly/hydrasdr-host-tools-Ubuntu-24.04-LTS-Noble-Numbat-v${VERSION}.zip
@@ -1706,14 +1708,16 @@ jobs:
         \`\`\`
 
         ## System Requirements:
-        - **libusb 1.0.23** (avoid 1.0.24 due to known issues)
+        - **libusb 1.0** - bundled in the Windows (1.0.30) and macOS archives, Linux packages depend on the distribution libusb-1.0 (>= 1.0.20, avoid 1.0.24 due to known issues)
         - **USB 2.0 or 3.0 port** for HydraSDR software-defined radio device
         - **64-bit architecture** (x86_64/amd64 or ARM64/aarch64)
-        - **Supported ARM64 platforms**: Raspberry Pi 3/4/5 (with 64-bit Ubuntu), Ampere, AWS Graviton
+        - **Supported ARM64 platforms**: Raspberry Pi 3/4/5 (with 64-bit Ubuntu), Ampere, AWS Graviton, Windows on ARM (Snapdragon X, ...), Apple Silicon
 
         ## DDC Benchmark Results:
         Benchmark results are collected during CI builds for performance tracking:
         - **Windows x64** - Available in benchmark-Windows-x64 artifact
+        - **Windows ARM64** - Available in benchmark-Windows-ARM64 artifact
+        - **Windows ARM64EC** - Available in benchmark-Windows-ARM64EC artifact
         - **Linux x86_64** - Available in benchmark-Ubuntu-24.04-LTS-Noble-Numbat artifact
         - **Linux ARM64** - Available in benchmark-Ubuntu-*-LTS-ARM64 artifacts
         - **macOS ARM64** (Apple Silicon) - Available in benchmark-macOS-ARM64 artifact
@@ -1729,9 +1733,9 @@ jobs:
         ## Comprehensive Distribution Coverage:
         This release provides native packages for **major GNU/Linux distributions** including all current LTS versions of Ubuntu, stable Debian releases, latest Fedora versions, and rolling-release distributions. 
         
-        **Distribution-specific naming**: All packages use clear, descriptive names that identify their target distribution (e.g., \`hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.deb\`, \`hydrasdr-host-tools-Fedora-42-v${VERSION}.rpm\`).
+        **Distribution-specific naming**: All packages use clear, descriptive names that identify their target distribution (e.g., \`hydrasdr-host-tools-Ubuntu-22.04-LTS-Jammy-Jellyfish-v${VERSION}.deb\`, \`hydrasdr-host-tools-Fedora-44-v${VERSION}.rpm\`).
         
-        **Special provision**: Ubuntu 24.04 and 22.04 provide both native .deb packages (recommended for users) and .zip archives (required for automated firmware build workflows).
+        **Special provision**: Ubuntu 26.04, 24.04 and 22.04 provide both native .deb packages (recommended for users) and .zip archives (required for automated firmware build workflows).
 
         ## Notes:
         - **Native packages strongly recommended** for easiest installation experience

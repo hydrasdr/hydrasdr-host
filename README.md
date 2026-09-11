@@ -379,6 +379,9 @@ cmake ../ -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 ```
 
+For Windows on ARM use `-A ARM64` (native ARM64 applications) or `-A ARM64EC`
+(hydrasdr.dll loadable by x64 applications running under emulation).
+
 For a release build with install (need administrative privileges): 
 ```
 cmake --build . --config Release --target install
@@ -458,7 +461,7 @@ make && sudo make install
 
 ## libusb Note
 
-MSVC builds automatically download libusb 1.0.29. For other platforms, avoid libusb v1.0.24 due to known issues.
+MSVC builds automatically download libusb 1.0.30. For other platforms, avoid libusb v1.0.24 due to known issues.
 
 ---
 

@@ -29,6 +29,13 @@ endif()
 # Use direct target name for in-tree builds
 list(APPEND DDC_TOOLS_LINK_LIBS hydrasdr_static)
 
+# The Linux zip archives ship the build-tree tools next to libhydrasdr.so,
+# so the tools must search their own directory at run time. Installed
+# binaries are not affected, CMAKE_BUILD_RPATH only applies in the build tree.
+if(UNIX AND NOT APPLE)
+  list(APPEND CMAKE_BUILD_RPATH "$ORIGIN")
+endif()
+
 if(MSVC)
   add_library(libgetopt_static STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../getopt/getopt.c)
