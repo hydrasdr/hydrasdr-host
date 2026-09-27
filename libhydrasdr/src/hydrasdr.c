@@ -839,6 +839,96 @@ ADDAPI int ADDCALL hydrasdr_set_packing(struct hydrasdr_device* device, uint8_t 
 	return HAL_DISPATCH(device, set_packing, value);
 }
 
+/* Stream metadata, timing and debug */
+ADDAPI int ADDCALL hydrasdr_set_framing(struct hydrasdr_device* device, uint8_t value)
+{
+	if (device == NULL || device->private_data == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_set_framing(device, value);
+}
+
+ADDAPI int ADDCALL hydrasdr_transfer_get_metadata(hydrasdr_transfer_t* transfer, hydrasdr_transfer_metadata_t* metadata)
+{
+	return hydrasdr_generic_transfer_get_metadata(transfer, metadata);
+}
+
+ADDAPI int ADDCALL hydrasdr_get_stream_status(struct hydrasdr_device* device, hydrasdr_stream_status_t* status)
+{
+	if (device == NULL || status == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_get_stream_status(device, status);
+}
+
+ADDAPI int ADDCALL hydrasdr_set_sof_divider(struct hydrasdr_device* device, uint32_t divider)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_set_sof_divider(device, divider);
+}
+
+ADDAPI int ADDCALL hydrasdr_set_uart_baud(struct hydrasdr_device* device, uint32_t baud)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_set_uart_baud(device, baud);
+}
+
+ADDAPI int ADDCALL hydrasdr_uart_write(struct hydrasdr_device* device, const uint8_t* data, uint16_t len)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_uart_write(device, data, len);
+}
+
+ADDAPI int ADDCALL hydrasdr_set_calibration(struct hydrasdr_device* device, int32_t correction_ppb)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_set_calibration(device, correction_ppb);
+}
+
+ADDAPI int ADDCALL hydrasdr_get_calibration(struct hydrasdr_device* device, hydrasdr_calibration_t* calibration)
+{
+	if (device == NULL || calibration == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_get_calibration(device, calibration);
+}
+
+ADDAPI int ADDCALL hydrasdr_watchdog_status(struct hydrasdr_device* device, hydrasdr_watchdog_status_t* status)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_watchdog(device, 0, status);
+}
+
+ADDAPI int ADDCALL hydrasdr_watchdog_feed(struct hydrasdr_device* device, hydrasdr_watchdog_status_t* status)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_watchdog(device, 1, status);
+}
+
+ADDAPI int ADDCALL hydrasdr_mem_read(struct hydrasdr_device* device, uint32_t address, void* data, uint16_t len)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_mem_read(device, address, data, len);
+}
+
+ADDAPI int ADDCALL hydrasdr_mem_write(struct hydrasdr_device* device, uint32_t address, const void* data, uint16_t len)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_mem_write(device, address, data, len);
+}
+
+ADDAPI int ADDCALL hydrasdr_call(struct hydrasdr_device* device, uint32_t core, uint32_t address, const uint32_t args[4], uint32_t* r0, uint32_t timeout_ms)
+{
+	if (device == NULL)
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	return hydrasdr_generic_call(device, core, address, args, r0, timeout_ms);
+}
+
 ADDAPI int ADDCALL hydrasdr_reset(struct hydrasdr_device* device)
 {
 	return HAL_DISPATCH(device, reset);

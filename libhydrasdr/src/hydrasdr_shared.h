@@ -47,6 +47,8 @@
 /* Buffer size constants */
 #define DEFAULT_BUFFER_SIZE (262144)              /* 256KB - default USB buffer size */
 #define PACKED_BUFFER_SIZE (6144 * 24)            /* 147KB - packed mode buffer size */
+#define BYTE_BUFFER_SIZE (4096 * 36)              /* 147KB - 8-bit mode buffer size */
+#define FRAMED_BLOCK_ALIGN (64)                   /* framed blocks: multiple of 4 and of the largest decimation */
 #define MAX_SUPPORTED_RATE_COUNT (100)            /* Sanity limit for rate/bandwidth arrays */
 
 /* Version string buffer size */
@@ -72,7 +74,8 @@ typedef struct {
 	bool consumer_thread_running;
 	uint32_t transfer_count;
 	uint32_t buffer_size;
-	bool packing_enabled;
+	bool packing_enabled;	/* 12-bit packed samples on the wire (packing 1 and 2) */
+	uint8_t packing_mode;	/* HYDRASDR_PACKING_* */
 	uint8_t adc_bits;	/* ADC bit depth from firmware: 8, 10, 12, 14, or 16 */
 	uint8_t data_format;	/* Data format from firmware: RAW_ADC or IQ_DIRECT */
 	enum hydrasdr_sample_type sample_type;
@@ -125,6 +128,25 @@ typedef struct {
 	/* Virtual sample rate table (hardware rates + decimated variants) */
 	uint32_t *virtual_samplerates;
 	uint32_t virtual_samplerate_count;
+
+	/*
+	 * ---- Framed chunks and packing 2 (consumer thread) ----
+	 * The payloads are gathered into deframed_samples behind the samples the
+	 * previous buffer left over (carry), and only a multiple of
+	 * FRAMED_BLOCK_ALIGN samples is processed, as the DDC needs.
+	 */
+	bool framing_requested;	/* asked of the device at every start_rx */
+	bool framing_active;	/* the device accepted it for this stream */
+	uint32_t sof_divider;	/* sent at every start_rx */
+	uint32_t sof_count_seen;	/* last SOF tag count deframed: a change means a new tag */
+	uint16_t *deframed_samples;
+	uint8_t *deframed_raw;	/* payloads only, for HYDRASDR_SAMPLE_RAW */
+	uint32_t carry_len;
+	uint64_t carry_index;	/* sample index of the first carried sample */
+	uint64_t expected_sample_index;
+	bool expected_sample_index_valid;
+	hydrasdr_transfer_metadata_t meta;
+	bool meta_valid;
 
 	/* Output triple buffer (allows callback to hold buffer while next processes) */
 	triple_buffer_t output_triple;
@@ -206,6 +228,18 @@ int hydrasdr_generic_set_bandwidth(struct hydrasdr_device* dev, uint32_t bandwid
 int hydrasdr_generic_get_bandwidths(struct hydrasdr_device* dev, uint32_t* buffer, const uint32_t len);
 int hydrasdr_generic_set_rf_bias(struct hydrasdr_device* dev, uint8_t value);
 int hydrasdr_generic_set_packing(struct hydrasdr_device* dev, uint8_t value);
+int hydrasdr_generic_set_framing(struct hydrasdr_device* dev, uint8_t value);
+int hydrasdr_generic_transfer_get_metadata(hydrasdr_transfer_t* transfer, hydrasdr_transfer_metadata_t* metadata);
+int hydrasdr_generic_get_stream_status(struct hydrasdr_device* dev, hydrasdr_stream_status_t* status);
+int hydrasdr_generic_set_sof_divider(struct hydrasdr_device* dev, uint32_t divider);
+int hydrasdr_generic_set_uart_baud(struct hydrasdr_device* dev, uint32_t baud);
+int hydrasdr_generic_uart_write(struct hydrasdr_device* dev, const uint8_t* data, uint16_t len);
+int hydrasdr_generic_set_calibration(struct hydrasdr_device* dev, int32_t correction_ppb);
+int hydrasdr_generic_get_calibration(struct hydrasdr_device* dev, hydrasdr_calibration_t* calibration);
+int hydrasdr_generic_watchdog(struct hydrasdr_device* dev, uint16_t feed, hydrasdr_watchdog_status_t* status);
+int hydrasdr_generic_mem_read(struct hydrasdr_device* dev, uint32_t address, void* data, uint16_t len);
+int hydrasdr_generic_mem_write(struct hydrasdr_device* dev, uint32_t address, const void* data, uint16_t len);
+int hydrasdr_generic_call(struct hydrasdr_device* dev, uint32_t core, uint32_t address, const uint32_t args[4], uint32_t* r0, uint32_t timeout_ms);
 int hydrasdr_generic_set_rf_port(struct hydrasdr_device* dev, hydrasdr_rf_port_t rf_port);
 int hydrasdr_generic_reset(struct hydrasdr_device* dev);
 int hydrasdr_generic_set_sample_type(struct hydrasdr_device* dev, enum hydrasdr_sample_type sample_type);

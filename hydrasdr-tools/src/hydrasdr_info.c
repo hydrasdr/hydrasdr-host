@@ -149,6 +149,14 @@ static void print_device_capabilities(struct hydrasdr_device* device, int device
 	printf("Board ID: %d\n", info.board_id);
 	printf("Board Name: %s\n", info.board_name);
 	printf("Firmware Version: %s\n", info.firmware_version);
+	{
+		hydrasdr_calibration_t cal;
+		if (hydrasdr_get_calibration(device, &cal) == HYDRASDR_SUCCESS) {
+			const char* src = cal.source == HYDRASDR_CALIBRATION_SOURCE_FLASH ? "flash" :
+				cal.source == HYDRASDR_CALIBRATION_SOURCE_HOST ? "host" : "none";
+			printf("Calibration: %d ppb (%s)\n", cal.correction_ppb, src);
+		}
+	}
 	printf("Part ID Number: 0x%08X 0x%08X\n",
 		info.part_serial.part_id[0],
 		info.part_serial.part_id[1]);

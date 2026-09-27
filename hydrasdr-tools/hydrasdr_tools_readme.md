@@ -147,7 +147,12 @@ hydrasdr_rx -w [options]             # Capture to WAV file (SDR++ format)
 - `-g <gain>`: Linearity gain (0-21)
 - `-h <gain>`: Sensitivity gain (0-21)
 - `-b <val>`: Bias Tee (0=disabled, 1=enabled)
-- `-p <val>`: Packing (0=16-bit, 1=12-bit packed)
+- `-p <val>`: Packing (0=16-bit, 1=12-bit packed, 2=12-bit packed with a chunk counter, 3=8-bit)
+- `-H <val>`: Framed chunks with sample counters (1=enabled, default when the firmware supports it; 0=disabled)
+- `-S <div>`: Tag the USB Start-Of-Frame of every frame (1 ms) whose number is a multiple of `div` with its sample index (0=off)
+- `-U <baud>`: Baud rate of the auxiliary UART (e.g. a GNSS module); `-N 1` prints the bytes it receives
+- `-C <ppb>`: Crystal correction in ppb, until the device resets
+- `-W 1`: Feed the device watchdog every second and show its state
 - `-n <samples>`: Limit number of samples
 - `-d`: Verbose mode
 
@@ -160,6 +165,19 @@ hydrasdr_rx -w [options]             # Capture to WAV file (SDR++ format)
 - 5: Raw ADC data
 
 **WAV Mode**: Creates SDR++ compatible WAV files with automatic timestamped filenames in format: HydraSDR_<freq_Hz>_<YYYYMMDD>_<HHMMSS>_<sample_type>_<channels>.wav
+
+With framing (firmware with the stream metadata commands), `hydrasdr_rx` also prints once per second the device ring counters, sample index and gap count, the last PPS edge and USB SOF tag.
+
+### hydrasdr_debug
+**Purpose**: Read and write device memory, and call device functions, for firmware debugging.
+
+**Usage**:
+```bash
+hydrasdr_debug read <addr> [words]            # Read 32-bit words
+hydrasdr_debug bytes <addr> [count]           # Read bytes
+hydrasdr_debug write <addr> <word>...         # Write 32-bit words
+hydrasdr_debug call <core> <addr> [r0..r3]    # Call a function on the M0 (0) or M4 (1)
+```
 
 ### hydrasdr_set_rf_port
 **Purpose**: Configure RF input port selection.

@@ -102,6 +102,10 @@ add_executable(hydrasdr_reset hydrasdr_reset.c)
 target_link_libraries(hydrasdr_reset ${TOOLS_LINK_LIBS})
 install(TARGETS hydrasdr_reset RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+add_executable(hydrasdr_debug hydrasdr_debug.c)
+target_link_libraries(hydrasdr_debug ${TOOLS_LINK_LIBS})
+install(TARGETS hydrasdr_debug RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 add_executable(hydrasdr_set_rf_port hydrasdr_set_rf_port.c)
 target_link_libraries(hydrasdr_set_rf_port ${TOOLS_LINK_LIBS})
 install(TARGETS hydrasdr_set_rf_port RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

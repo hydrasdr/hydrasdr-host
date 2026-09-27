@@ -550,7 +550,7 @@ typedef struct
  * This function can be called at any time, including during streaming,
  * to query current configuration state (fields ordered to match typical API call sequence):
  * - current_decimation_mode: 0=Low Bandwidth, 1=High Definition
- * - current_packing: 0=16-bit, 1=12-bit packed
+ * - current_packing: HYDRASDR_PACKING_* (0=16-bit, 1=12-bit packed, 2=12-bit with counter, 3=8-bit)
  * - bandwidth_auto_selected: 1 if bandwidth was auto-selected, 0 if manually set
  * - current_adc_bits: ADC bit depth for current sample rate (8, 10, 12, 14, or 16)
  * - current_decimation_factor: Decimation factor (1, 2, 4, 8, 16, 32, or 64)
@@ -657,7 +657,7 @@ typedef struct
 	/* Current configuration state (populated by hydrasdr_get_device_info, can be queried during streaming)
 	 * Fields ordered to match typical API call sequence: decimation_mode -> bandwidth -> samplerate */
 	uint8_t current_decimation_mode;    /**< Current decimation mode (0=Low Bandwidth, 1=High Definition) */
-	uint8_t current_packing;            /**< Current packing mode (0=16-bit, 1=12-bit packed) */
+	uint8_t current_packing;            /**< Current packing mode, HYDRASDR_PACKING_* */
 	uint8_t bandwidth_auto_selected;    /**< 1 if bandwidth was auto-selected, 0 if manually set */
 	uint8_t current_adc_bits;           /**< ADC bit depth for current sample rate (8, 10, 12, 14, or 16); 0 if unknown @since v1.1.2 */
 	uint32_t current_decimation_factor; /**< Current decimation factor (1, 2, 4, 8, 16, 32, or 64) */
@@ -728,6 +728,111 @@ typedef struct {
 	uint64_t buffers_dropped;    /**< Buffers dropped due to queue overflow (data loss!) */
 	uint64_t reserved[5];        /**< Reserved for future expansion */
 } hydrasdr_streaming_stats_t;
+
+/* ==========================================================================
+ * Stream Metadata and Timing Structures
+ * ========================================================================== */
+
+/**
+ * @brief Device-side stream counters, in chunks
+ *
+ * A chunk is the device's unit of USB transfer (see hydrasdr_transfer_metadata_t).
+ * Counters restart at every hydrasdr_start_rx().
+ *
+ * @see hydrasdr_get_stream_status()
+ */
+typedef struct {
+	uint32_t captured;      /**< Chunks captured by the ADC DMA */
+	uint32_t delivered;     /**< Chunks whose USB transfer to the host completed */
+	uint32_t lost;          /**< Chunks overwritten before they could be sent: the sample stream has gaps */
+	uint32_t overruns;      /**< Chunks delivered while the DMA was already overwriting them */
+	uint32_t backlog_max;   /**< Worst number of chunks pending at the device */
+	uint32_t ring_chunks;   /**< Chunks the device ring buffer holds */
+	uint32_t chunk_bytes;   /**< Bytes per chunk on USB */
+	uint32_t chunk_samples; /**< Real ADC samples per chunk */
+	uint32_t m0_lag_max;    /**< Worst lag of the device's USB queuing behind the ADC, in chunks */
+	uint32_t dma_errors;    /**< ADC DMA bus errors */
+	uint32_t usb_errors;    /**< Bulk transfers the USB controller retired with an error */
+	uint32_t adc_overflows; /**< Chunks during which the ADC FIFO overflowed */
+	uint32_t pps_count;     /**< PPS edges captured since the stream started */
+	uint32_t sof_count;     /**< USB SOFs tagged since the stream started */
+	uint32_t sof_edges;     /**< USB SOFs captured since the stream started, tagged or not */
+	uint32_t sof_divider;   /**< SOF tagging divider in effect, 0 = off */
+} hydrasdr_stream_status_t;
+
+#define HYDRASDR_METADATA_UART_MAX (512) /**< More than 15 UART bytes per chunk times the chunks per block */
+#define HYDRASDR_METADATA_SOF_MAX (40)   /**< More than the chunks per block: each chunk carries one SOF tag */
+
+/**
+ * @brief A USB Start-Of-Frame tag: the device captured the SOF opening USB frame 'frame' at this sample
+ */
+typedef struct {
+	uint64_t sample_index; /**< Device sample index of the SOF */
+	uint32_t fraction;     /**< Position of the SOF within that sample, in 1/2^32 sample units */
+	uint32_t frame;        /**< USB frame number, extended past the controller's 11-bit wrap */
+	uint32_t count;        /**< SOFs tagged since the stream started, this one included */
+} hydrasdr_sof_tag_t;
+
+/**
+ * @brief Metadata of the block delivered to the sample callback (framed streams)
+ *
+ * Sample indices count real ADC samples since the stream started, so an IQ
+ * sample index is half of it (divided further by the decimation factor).
+ *
+ * @see hydrasdr_transfer_get_metadata()
+ */
+typedef struct {
+	uint64_t sample_index;      /**< Device sample index of the first sample of this block */
+	uint64_t gap_samples;       /**< Samples missing between the previous block and this one, or inside this one */
+	uint32_t chunks;            /**< Device chunks that contributed to this block */
+	uint32_t lost_chunks;       /**< Chunks the device lost since the stream started */
+	uint32_t overrun_chunks;    /**< Chunks the device delivered corrupted since the stream started */
+	uint32_t sync_errors;       /**< Chunks with an invalid header since the stream started */
+	uint32_t duplicate_chunks;  /**< Chunks in this block whose samples had already been delivered */
+	uint32_t freq_hz;           /**< Tuner frequency when the block's first chunk was queued */
+	uint64_t pps_sample_index;  /**< Sample index of the last PPS edge, from the block's last chunk */
+	uint32_t pps_fraction;      /**< Position of the edge within that sample, in 1/2^32 sample units */
+	uint32_t pps_count;         /**< PPS edges captured since the stream started */
+	uint32_t uart_len;          /**< Bytes received on the device's auxiliary UART */
+	uint8_t uart_data[HYDRASDR_METADATA_UART_MAX];
+	uint32_t flags;             /**< HYDRASDR_FRAME_FLAG_* of the first chunk */
+	uint32_t adc_status;        /**< Packing 2: ADC status bits of the block's chunks, ORed */
+	uint64_t sof_sample_index;  /**< Last USB SOF tag of the block, see hydrasdr_set_sof_divider() */
+	uint32_t sof_fraction;
+	uint32_t sof_frame;
+	uint32_t sof_count;
+	uint32_t sof_tags_len;      /**< Distinct SOF tags the block's chunks carried */
+	hydrasdr_sof_tag_t sof_tags[HYDRASDR_METADATA_SOF_MAX];
+} hydrasdr_transfer_metadata_t;
+
+/* hydrasdr_calibration_t source values */
+#define HYDRASDR_CALIBRATION_SOURCE_NONE  (0) /**< No correction */
+#define HYDRASDR_CALIBRATION_SOURCE_FLASH (1) /**< The calibration block in the device flash */
+#define HYDRASDR_CALIBRATION_SOURCE_HOST  (2) /**< Set by hydrasdr_set_calibration() */
+
+/**
+ * @brief Crystal correction in effect on the device
+ */
+typedef struct {
+	int32_t correction_ppb; /**< Crystal correction in ppb */
+	uint32_t source;        /**< HYDRASDR_CALIBRATION_SOURCE_* */
+} hydrasdr_calibration_t;
+
+/* hydrasdr_watchdog_status_t flags */
+#define HYDRASDR_WATCHDOG_FLAG_ARMED (1 << 0)             /**< The watchdog is running */
+#define HYDRASDR_WATCHDOG_FLAG_RESET_BY_WATCHDOG (1 << 1) /**< The last reset was a watchdog time-out (best effort) */
+#define HYDRASDR_WATCHDOG_FLAG_HOST_OWNED (1 << 2)        /**< Strict mode: the host has made contact, only the host feeds */
+#define HYDRASDR_WATCHDOG_FLAG_STRICT (1 << 3)            /**< Firmware built with WATCHDOG=1: the host protocol applies */
+
+/**
+ * @brief Device watchdog state
+ */
+typedef struct {
+	uint32_t flags;           /**< HYDRASDR_WATCHDOG_FLAG_* */
+	uint32_t timeout_ms;      /**< Time between feeds the device tolerates */
+	uint32_t remaining_ms;    /**< Time left before a reset when the reply was built */
+	uint32_t self_feeds_left; /**< Strict mode: self feeds left before host contact; 0xFFFFFFFF when unlimited */
+} hydrasdr_watchdog_status_t;
 
 /* ========================================================================
  * Core API Functions
@@ -1329,11 +1434,17 @@ extern ADDAPI int ADDCALL hydrasdr_set_freq(struct hydrasdr_device* device, cons
  * Controls sample packing mode to reduce USB bandwidth.
  * 
  * @param[in] device Device handle
- * @param[in] value  0 = disable packing, 1 = enable packing
- * 
+ * @param[in] value  HYDRASDR_PACKING_16BIT (0) = 16-bit samples,
+ *                   HYDRASDR_PACKING_12BIT (1) = 12-bit packed,
+ *                   HYDRASDR_PACKING_TIMESTAMP (2) = 12-bit packed with a chunk counter
+ *                   and the ADC status per chunk (the library strips them from the samples),
+ *                   HYDRASDR_PACKING_8BIT (3) = the top 8 bits of each sample, delivered
+ *                   on the 12-bit scale (half the USB bandwidth of packing 1)
+ *
  * @return HYDRASDR_SUCCESS on success, error code on failure
- * 
+ *
  * @note Check HYDRASDR_CAP_PACKING capability before using
+ * @note Values 2 and 3 need a firmware that supports them; the device stalls otherwise
  * @note Must be set before starting streaming
  * @note Thread-safe after device is opened
  *
@@ -1457,6 +1568,216 @@ extern ADDAPI int ADDCALL hydrasdr_is_streaming(struct hydrasdr_device* device);
 extern ADDAPI int ADDCALL hydrasdr_get_streaming_stats(struct hydrasdr_device* device, hydrasdr_streaming_stats_t* stats);
 
 /** @} */ // end of streaming_api group
+
+/**
+ * @defgroup metadata_api Stream Metadata and Timing
+ * @ingroup hydrasdr_api
+ * @brief Framed chunks with sample counters, PPS and USB SOF timestamps, auxiliary UART, device diagnostics
+ *
+ * These need a firmware with the stream metadata commands; on an older
+ * firmware the calls fail and framing stays off.
+ * @{
+ */
+
+/**
+ * @brief Enable/disable framed chunks
+ *
+ * With framing, every chunk the device sends starts with a header carrying
+ * its sample index, the device loss counters, the last PPS edge and USB SOF
+ * tag, and bytes from the auxiliary UART. The library strips the headers,
+ * so the sample stream is unchanged, and makes the information available to
+ * the sample callback through hydrasdr_transfer_get_metadata().
+ *
+ * Framing is requested by default. The library asks the device at every
+ * hydrasdr_start_rx() and silently streams without it when the firmware
+ * does not support it.
+ *
+ * @param[in] device Device handle
+ * @param[in] value  1 = framed chunks (default), 0 = plain samples
+ *
+ * @return HYDRASDR_SUCCESS on success
+ * @retval HYDRASDR_ERROR_BUSY Device is streaming
+ * @retval HYDRASDR_ERROR_LIBUSB The firmware does not support framing
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_set_framing(struct hydrasdr_device* device, uint8_t value);
+
+/**
+ * @brief Get the metadata of the block a sample callback is being called with
+ *
+ * Only valid inside the sample callback, for the transfer it was given.
+ *
+ * @param[in]  transfer Transfer passed to the sample callback
+ * @param[out] metadata Receives the block's metadata
+ *
+ * @return HYDRASDR_SUCCESS on success
+ * @retval HYDRASDR_ERROR_UNSUPPORTED The stream is not framed
+ * @retval HYDRASDR_ERROR_INVALID_PARAM NULL argument
+ *
+ * @par Example:
+ * @code
+ * int callback(hydrasdr_transfer_t* transfer)
+ * {
+ *     hydrasdr_transfer_metadata_t meta;
+ *     if (hydrasdr_transfer_get_metadata(transfer, &meta) == HYDRASDR_SUCCESS && meta.gap_samples)
+ *         fprintf(stderr, "%llu samples lost\n", (unsigned long long)meta.gap_samples);
+ *     return 0;
+ * }
+ * @endcode
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_transfer_get_metadata(hydrasdr_transfer_t* transfer, hydrasdr_transfer_metadata_t* metadata);
+
+/**
+ * @brief Read the device stream counters
+ *
+ * @param[in]  device Device handle
+ * @param[out] status Receives the counters
+ *
+ * @return HYDRASDR_SUCCESS on success, HYDRASDR_ERROR_LIBUSB if the firmware does not support it
+ *
+ * @note Can be called while streaming
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_get_stream_status(struct hydrasdr_device* device, hydrasdr_stream_status_t* status);
+
+/**
+ * @brief Tag USB Start-Of-Frame pulses with their sample index
+ *
+ * The device tags the SOF opening every USB frame (1 ms; at high speed the
+ * microframe 0 SOF, the one a full-speed bus sees) whose frame number is a
+ * multiple of the divider. The tags reach the sample callback through
+ * hydrasdr_transfer_get_metadata(). Each chunk header carries one tag, so
+ * keep the tag rate below the chunk rate to receive every tag; a skipped tag
+ * shows as a jump in the tag count. Works alongside the PPS input.
+ *
+ * @param[in] device  Device handle
+ * @param[in] divider Tag frames whose number is a multiple of this, 0 = off
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @note Can be changed while streaming; the library sends it again at every hydrasdr_start_rx()
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_set_sof_divider(struct hydrasdr_device* device, uint32_t divider);
+
+/**
+ * @brief Set the baud rate of the device's auxiliary UART (8N1), e.g. for a GNSS module
+ *
+ * Received bytes arrive in hydrasdr_transfer_metadata_t::uart_data while streaming framed.
+ *
+ * @param[in] device Device handle
+ * @param[in] baud   Baud rate, 300 to 1000000
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_set_uart_baud(struct hydrasdr_device* device, uint32_t baud);
+
+/**
+ * @brief Transmit bytes on the device's auxiliary UART
+ *
+ * @param[in] device Device handle
+ * @param[in] data   Bytes to send
+ * @param[in] len    1 to 64
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_uart_write(struct hydrasdr_device* device, const uint8_t* data, uint16_t len);
+
+/**
+ * @brief Set the crystal correction, applied at once to the tuner
+ *
+ * Overrides the calibration stored in the device flash until the device resets.
+ * The environment variable HYDRASDR_CALIBRATION_PPB applies one at open.
+ *
+ * @param[in] device         Device handle
+ * @param[in] correction_ppb Crystal correction in ppb
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_set_calibration(struct hydrasdr_device* device, int32_t correction_ppb);
+
+/**
+ * @brief Get the crystal correction in effect and where it came from
+ *
+ * @param[in]  device      Device handle
+ * @param[out] calibration Receives the correction
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_get_calibration(struct hydrasdr_device* device, hydrasdr_calibration_t* calibration);
+
+/**
+ * @brief Read the device watchdog state
+ *
+ * @param[in]  device Device handle
+ * @param[out] status Receives the state (may be NULL)
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_watchdog_status(struct hydrasdr_device* device, hydrasdr_watchdog_status_t* status);
+
+/**
+ * @brief Feed the device watchdog and read its state
+ *
+ * On a firmware built with WATCHDOG=1 (strict mode) the first feed hands the
+ * watchdog to the host, which must then keep feeding it or the device resets.
+ *
+ * @param[in]  device Device handle
+ * @param[out] status Receives the state after the feed (may be NULL)
+ *
+ * @return HYDRASDR_SUCCESS on success, error code on failure
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_watchdog_feed(struct hydrasdr_device* device, hydrasdr_watchdog_status_t* status);
+
+/**
+ * @brief Debug: read up to 64 bytes of device memory
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_mem_read(struct hydrasdr_device* device, uint32_t address, void* data, uint16_t len);
+
+/**
+ * @brief Debug: write up to 64 bytes of device memory
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_mem_write(struct hydrasdr_device* device, uint32_t address, const void* data, uint16_t len);
+
+/**
+ * @brief Debug: call a function on the device
+ *
+ * @param[in]  device     Device handle
+ * @param[in]  core       0 = M0 (runs in the USB request handler), 1 = M4 (runs in its main loop)
+ * @param[in]  address    Function address (the Thumb bit is added by the device)
+ * @param[in]  args       Four arguments, r0 to r3
+ * @param[out] r0         Return value
+ * @param[in]  timeout_ms How long to wait for an M4 call to finish
+ *
+ * @return HYDRASDR_SUCCESS on success
+ * @retval HYDRASDR_ERROR_BUSY The M4 call did not finish in time
+ *
+ * @since v1.2.0
+ */
+extern ADDAPI int ADDCALL hydrasdr_call(struct hydrasdr_device* device, uint32_t core, uint32_t address, const uint32_t args[4], uint32_t* r0, uint32_t timeout_ms);
+
+/** @} */ // end of metadata_api group
 
 /**
  * @defgroup gain_api Gain Control

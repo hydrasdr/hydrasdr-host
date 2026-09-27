@@ -63,6 +63,85 @@ typedef enum
 	HYDRASDR_VENDOR_REQUEST_COUNT /* Sentinel - total number of vendor requests */
 } hydrasdr_vendor_request;
 
+/*
+ * Stream metadata, timing and debug commands. They live in their own block,
+ * clear of the main range above so both can grow independently.
+ */
+#define HYDRASDR_EXT_CMD_BASE (0x80)
+typedef enum
+{
+	HYDRASDR_GET_STREAM_STATUS = HYDRASDR_EXT_CMD_BASE + 0, /**< IN: hydrasdr_stream_status_t */
+	HYDRASDR_SET_FRAMING = HYDRASDR_EXT_CMD_BASE + 1,       /**< wIndex = 1 for framed chunks; IN: 1 byte */
+	HYDRASDR_WATCHDOG = HYDRASDR_EXT_CMD_BASE + 2,          /**< wIndex = 1 feeds; IN: hydrasdr_watchdog_status_t */
+	HYDRASDR_SET_UART_BAUD = HYDRASDR_EXT_CMD_BASE + 3,     /**< wValue = baud & 0xFFFF, wIndex = baud >> 16 */
+	HYDRASDR_UART_WRITE = HYDRASDR_EXT_CMD_BASE + 4,        /**< OUT: bytes to transmit (max 64) */
+	HYDRASDR_SET_CALIBRATION = HYDRASDR_EXT_CMD_BASE + 5,   /**< wValue | wIndex << 16 = crystal correction in ppb (int32) */
+	HYDRASDR_GET_CALIBRATION = HYDRASDR_EXT_CMD_BASE + 6,   /**< IN: hydrasdr_calibration_t */
+	HYDRASDR_MEM_READ = HYDRASDR_EXT_CMD_BASE + 7,          /**< IN: wValue | wIndex << 16 = address, wLength <= 64 */
+	HYDRASDR_MEM_WRITE = HYDRASDR_EXT_CMD_BASE + 8,         /**< OUT: same addressing, data = bytes to write */
+	HYDRASDR_CALL = HYDRASDR_EXT_CMD_BASE + 9,              /**< OUT: hydrasdr_call_request_t; IN: hydrasdr_call_result_t */
+	HYDRASDR_SET_SOF_DIVIDER = HYDRASDR_EXT_CMD_BASE + 10   /**< wValue | wIndex << 16 = divider, 0 = off */
+} hydrasdr_ext_vendor_request;
+
+/* HYDRASDR_SET_PACKING values */
+#define HYDRASDR_PACKING_16BIT     (0) /**< 16-bit samples */
+#define HYDRASDR_PACKING_12BIT     (1) /**< 12-bit packed samples */
+#define HYDRASDR_PACKING_TIMESTAMP (2) /**< 12-bit packed, the first two values of each chunk are the chunk counter and the ADC status */
+#define HYDRASDR_PACKING_8BIT      (3) /**< one byte per sample, the top 8 bits */
+
+/* Framed chunks: every USB chunk starts with a hydrasdr_frame_header_t */
+#define HYDRASDR_FRAME_HEADER_SIZE (96)
+#define HYDRASDR_FRAME_MAGIC (0x42445642)
+#define HYDRASDR_FRAME_UART_BYTES (15)    /* auxiliary UART bytes carried per chunk header */
+#define HYDRASDR_FRAME_FLAG_PACKED    (1 << 0) /* 12-bit packed samples (packing 1 and 2) */
+#define HYDRASDR_FRAME_FLAG_8BIT      (1 << 1) /* one byte per sample (packing 3) */
+#define HYDRASDR_FRAME_FLAG_TIMESTAMP (1 << 2) /* packing 2: chunk counter and ADC status ahead of the samples */
+
+/* Chunk size on the wire, framed or not */
+#define HYDRASDR_CHUNK_WIRE_16BIT  (16384)
+#define HYDRASDR_CHUNK_WIRE_PACKED (6144)
+#define HYDRASDR_CHUNK_WIRE_8BIT   (4096)
+
+/* Chunk header as sent by the device, little-endian */
+typedef struct
+{
+	uint32_t sample_index_lo;     /* index of this chunk's first sample in the ADC sample stream */
+	uint32_t sample_index_hi;
+	uint32_t magic;               /* HYDRASDR_FRAME_MAGIC */
+	uint32_t chunk_index;         /* chunk number since stream start */
+	uint32_t sample_count;        /* real samples in this chunk */
+	uint32_t flags;               /* HYDRASDR_FRAME_FLAG_* */
+	uint32_t lost_chunks;         /* chunks the device lost so far */
+	uint32_t overrun_chunks;      /* chunks the device delivered corrupted so far */
+	uint32_t freq_hz;             /* tuner frequency when this chunk was queued */
+	uint32_t pps_sample_index_lo; /* sample index of the last PPS edge */
+	uint32_t pps_sample_index_hi;
+	uint32_t pps_fraction;        /* position of that edge within the sample, 1/2^32 sample units */
+	uint32_t pps_count;           /* PPS edges captured since the stream started */
+	uint8_t uart_len;             /* auxiliary UART bytes carried in this chunk */
+	uint8_t uart_data[HYDRASDR_FRAME_UART_BYTES];
+	uint32_t sof_sample_index_lo; /* sample index of the last tagged USB SOF */
+	uint32_t sof_sample_index_hi;
+	uint32_t sof_fraction;
+	uint32_t sof_frame;           /* its USB frame number, extended past the 11-bit wrap */
+	uint32_t sof_count;           /* SOFs tagged since the stream started */
+	uint32_t reserved[2];
+} hydrasdr_frame_header_t;
+
+/* HYDRASDR_CALL */
+typedef struct
+{
+	uint32_t core;    /* 0 = M0 (runs in the USB request handler), 1 = M4 (runs in its main loop) */
+	uint32_t address; /* function address; the Thumb bit is added by the device */
+	uint32_t r[4];    /* arguments */
+} hydrasdr_call_request_t;
+
+typedef struct
+{
+	uint32_t status;  /* 0 = done (r0 valid), 1 = still running on the M4, 2 = bad request */
+	uint32_t r0;
+} hydrasdr_call_result_t;
+
 typedef enum
 {
 	HYDRASDR_GPIO_PORT0 = 0,

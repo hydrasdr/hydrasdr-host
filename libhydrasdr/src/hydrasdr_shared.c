@@ -19,6 +19,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 /*
@@ -158,6 +160,14 @@ static int hydrasdr_free_transfers(hydrasdr_streaming_t* stream)
 			opt_aligned_free(stream->unpacked_samples);
 			stream->unpacked_samples = NULL;
 		}
+
+		if (stream->deframed_samples != NULL)
+		{
+			opt_aligned_free(stream->deframed_samples);
+			stream->deframed_samples = NULL;
+		}
+		free(stream->deframed_raw);
+		stream->deframed_raw = NULL;
 	}
 
 	return HYDRASDR_SUCCESS;
@@ -190,7 +200,11 @@ static int hydrasdr_alloc_transfers(hydrasdr_streaming_t* stream)
 			memset(stream->received_samples_queue[i], 0, stream->buffer_size);
 		}
 
-		if (stream->packing_enabled)
+		if (stream->packing_mode == HYDRASDR_PACKING_8BIT)
+		{
+			sample_count = stream->buffer_size;
+		}
+		else if (stream->packing_enabled)
 		{
 			/* Use 64-bit arithmetic to prevent overflow */
 			sample_count = (((size_t)stream->buffer_size / 2) * 4) / 3;
@@ -199,6 +213,8 @@ static int hydrasdr_alloc_transfers(hydrasdr_streaming_t* stream)
 		{
 			sample_count = stream->buffer_size / 2;
 		}
+		/* A framed block also processes the samples the previous one carried over */
+		sample_count += FRAMED_BLOCK_ALIGN;
 
 		/* Allocate output triple buffer for pipelined processing */
 		result = triple_buffer_init(&stream->output_triple,
@@ -209,7 +225,7 @@ static int hydrasdr_alloc_transfers(hydrasdr_streaming_t* stream)
 			goto cleanup;
 		}
 
-		if (stream->packing_enabled)
+		if (stream->packing_enabled || stream->packing_mode == HYDRASDR_PACKING_8BIT)
 		{
 			/* Allocate unpacked samples buffer with SIMD alignment */
 			stream->unpacked_samples = (uint16_t*)opt_simd_aligned_alloc(sample_count * sizeof(uint16_t));
@@ -218,6 +234,15 @@ static int hydrasdr_alloc_transfers(hydrasdr_streaming_t* stream)
 				result = HYDRASDR_ERROR_NO_MEM;
 				goto cleanup;
 			}
+		}
+
+		/* Framed chunks and packing 2 gather their samples here */
+		stream->deframed_samples = (uint16_t*)opt_simd_aligned_alloc(sample_count * sizeof(uint16_t));
+		stream->deframed_raw = (uint8_t*)malloc(stream->buffer_size);
+		if (stream->deframed_samples == NULL || stream->deframed_raw == NULL)
+		{
+			result = HYDRASDR_ERROR_NO_MEM;
+			goto cleanup;
 		}
 
 		stream->transfers = (struct libusb_transfer**) calloc(stream->transfer_count, sizeof(struct libusb_transfer));
@@ -304,6 +329,14 @@ cleanup:
 			opt_aligned_free(stream->unpacked_samples);
 			stream->unpacked_samples = NULL;
 		}
+
+		if (stream->deframed_samples != NULL)
+		{
+			opt_aligned_free(stream->deframed_samples);
+			stream->deframed_samples = NULL;
+		}
+		free(stream->deframed_raw);
+		stream->deframed_raw = NULL;
 
 		/* Free triple buffer */
 		if (stream->output_triple.buffers[0] != NULL)
@@ -588,6 +621,180 @@ void hydrasdr_unpack_samples_reference(const uint16_t* input,
 	}
 }
 
+/*
+ * Framed chunks and packing 2
+ *
+ * A buffer holds whole device chunks of HYDRASDR_CHUNK_WIRE_* bytes. With
+ * framing each chunk starts with a hydrasdr_frame_header_t; in packing 2 the
+ * first two 12-bit values of each chunk are the chunk counter and the ADC
+ * status, not samples.
+ */
+static uint32_t chunk_wire_bytes(const hydrasdr_streaming_t* stream)
+{
+	if (stream->packing_mode == HYDRASDR_PACKING_8BIT)
+		return HYDRASDR_CHUNK_WIRE_8BIT;
+	return stream->packing_enabled ? HYDRASDR_CHUNK_WIRE_PACKED : HYDRASDR_CHUNK_WIRE_16BIT;
+}
+
+/* Values (samples, or packing 2 counter and status) in a chunk payload */
+static uint32_t payload_values(const hydrasdr_streaming_t* stream, uint32_t bytes)
+{
+	if (stream->packing_mode == HYDRASDR_PACKING_8BIT)
+		return bytes;
+	if (stream->packing_enabled)
+		return (bytes / 3) * 2;
+	return bytes / 2;
+}
+
+/* Take a chunk header into the block metadata; false skips the chunk */
+static bool deframe_header(hydrasdr_streaming_t* stream, const uint8_t* chunk, uint32_t samples, uint64_t* index)
+{
+	const hydrasdr_frame_header_t* h = (const hydrasdr_frame_header_t*)chunk;
+	hydrasdr_transfer_metadata_t* m = &stream->meta;
+	uint32_t n;
+
+	if (TO_LE_32(h->magic) != HYDRASDR_FRAME_MAGIC || TO_LE_32(h->sample_count) != samples) {
+		m->sync_errors++;
+		return false;
+	}
+	*index = ((uint64_t)TO_LE_32(h->sample_index_hi) << 32) | TO_LE_32(h->sample_index_lo);
+	if (stream->expected_sample_index_valid && *index < stream->expected_sample_index) {
+		m->duplicate_chunks++;
+		return false;
+	}
+	if (m->chunks == 0) {
+		m->flags = TO_LE_32(h->flags);
+		m->freq_hz = TO_LE_32(h->freq_hz);
+	}
+	if (stream->expected_sample_index_valid && *index > stream->expected_sample_index) {
+		m->gap_samples += *index - stream->expected_sample_index;
+	}
+	stream->expected_sample_index = *index + samples;
+	stream->expected_sample_index_valid = true;
+
+	m->lost_chunks = TO_LE_32(h->lost_chunks);
+	m->overrun_chunks = TO_LE_32(h->overrun_chunks);
+	m->pps_sample_index = ((uint64_t)TO_LE_32(h->pps_sample_index_hi) << 32) | TO_LE_32(h->pps_sample_index_lo);
+	m->pps_fraction = TO_LE_32(h->pps_fraction);
+	m->pps_count = TO_LE_32(h->pps_count);
+	m->sof_sample_index = ((uint64_t)TO_LE_32(h->sof_sample_index_hi) << 32) | TO_LE_32(h->sof_sample_index_lo);
+	m->sof_fraction = TO_LE_32(h->sof_fraction);
+	m->sof_frame = TO_LE_32(h->sof_frame);
+	m->sof_count = TO_LE_32(h->sof_count);
+	if (m->sof_count != 0 && m->sof_count != stream->sof_count_seen && m->sof_tags_len < HYDRASDR_METADATA_SOF_MAX) {
+		hydrasdr_sof_tag_t* tag = &m->sof_tags[m->sof_tags_len++];
+		tag->sample_index = m->sof_sample_index;
+		tag->fraction = m->sof_fraction;
+		tag->frame = m->sof_frame;
+		tag->count = m->sof_count;
+	}
+	stream->sof_count_seen = m->sof_count;
+
+	n = h->uart_len;
+	if (n > HYDRASDR_FRAME_UART_BYTES)
+		n = HYDRASDR_FRAME_UART_BYTES;
+	if (m->uart_len + n <= HYDRASDR_METADATA_UART_MAX) {
+		memcpy(&m->uart_data[m->uart_len], h->uart_data, n);
+		m->uart_len += n;
+	}
+	return true;
+}
+
+/*
+ * Gather the samples of a framed or packing 2 buffer.
+ *
+ * Samples: they go to deframed_samples behind the carry, as uint16_t on the
+ * 12-bit scale; the return value is how many to process now, a multiple of
+ * FRAMED_BLOCK_ALIGN, and carry_len is set to what stays for the next buffer
+ * (deframe_keep_carry() moves it once the block is consumed).
+ * Raw: the chunk payloads go to deframed_raw unchanged, in the units of
+ * HYDRASDR_SAMPLE_RAW (12-bit values when packed).
+ */
+static int deframe_buffer(hydrasdr_streaming_t* stream, const uint8_t* raw, bool keep_raw)
+{
+	const uint32_t wire = chunk_wire_bytes(stream);
+	const uint32_t header = stream->framing_active ? HYDRASDR_FRAME_HEADER_SIZE : 0;
+	const uint32_t skip = (stream->packing_mode == HYDRASDR_PACKING_TIMESTAMP) ? 2 : 0;
+	const uint32_t values = payload_values(stream, wire - header);
+	const uint32_t chunks = stream->buffer_size / wire;
+	hydrasdr_transfer_metadata_t* m = &stream->meta;
+	uint16_t* out = stream->deframed_samples + stream->carry_len;
+	size_t raw_bytes = 0;
+	bool have_start = !keep_raw && stream->carry_len > 0;
+	uint32_t c, i, total, ready;
+
+	m->sample_index = stream->carry_index;
+	m->chunks = 0;
+	m->gap_samples = 0;
+	m->duplicate_chunks = 0;
+	m->uart_len = 0;
+	m->adc_status = 0;
+	m->sof_tags_len = 0;
+
+	for (c = 0; c < chunks; c++) {
+		const uint8_t* chunk = raw + (size_t)c * wire;
+		const uint8_t* payload = chunk + header;
+		uint64_t index = 0;
+
+		if (header && !deframe_header(stream, chunk, values - skip, &index))
+			continue;
+		if (!have_start) {
+			m->sample_index = index;
+			have_start = true;
+		}
+		m->chunks++;
+
+		if (keep_raw) {
+			memcpy(stream->deframed_raw + raw_bytes, payload, wire - header);
+			raw_bytes += wire - header;
+			continue;
+		}
+
+		if (stream->packing_mode == HYDRASDR_PACKING_8BIT) {
+			for (i = 0; i < values; i++)
+				out[i] = (uint16_t)(payload[i] << 4);
+		} else if (stream->packing_enabled) {
+			hydrasdr_unpack_samples((const uint16_t*)payload, out, (int)values);
+		} else {
+			memcpy(out, payload, values * sizeof(uint16_t));
+		}
+		if (skip) {
+			m->adc_status |= out[1];
+			memmove(out, out + skip, (values - skip) * sizeof(uint16_t));
+		}
+		out += values - skip;
+	}
+
+	stream->meta_valid = stream->framing_active && m->chunks > 0;
+
+	if (keep_raw)
+		return (int)(m->chunks * values);
+
+	total = (uint32_t)(out - stream->deframed_samples);
+	ready = total - total % FRAMED_BLOCK_ALIGN;
+	stream->carry_len = total - ready;
+	stream->carry_index = header ? stream->expected_sample_index - stream->carry_len : 0;
+	return (int)ready;
+}
+
+/* Move the samples left over by the block just consumed to the front */
+static void deframe_keep_carry(hydrasdr_streaming_t* stream, uint32_t consumed)
+{
+	memmove(stream->deframed_samples, stream->deframed_samples + consumed,
+		stream->carry_len * sizeof(uint16_t));
+}
+
+static void deframe_reset(hydrasdr_streaming_t* stream)
+{
+	memset(&stream->meta, 0, sizeof(stream->meta));
+	stream->meta_valid = false;
+	stream->expected_sample_index_valid = false;
+	stream->expected_sample_index = 0;
+	stream->sof_count_seen = 0;
+	stream->carry_len = 0;
+	stream->carry_index = 0;
+}
+
 /* USB transfer callback */
 
 static void LIBUSB_CALL hydrasdr_libusb_transfer_callback(struct libusb_transfer* usb_transfer)
@@ -662,6 +869,7 @@ static void LIBUSB_CALL hydrasdr_libusb_transfer_callback(struct libusb_transfer
 static void* hydrasdr_consumer_threadproc(void *arg)
 {
 	int sample_count;
+	int deframed_count;
 	uint16_t* input_samples;
 	uint32_t dropped_buffers;
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)arg;
@@ -708,11 +916,46 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 
 		input_samples = (uint16_t *)buffer_ptr;
 		stream->stats.total_buffers_processed++;
+		deframed_count = 0;
 
 		/* Get output buffer from triple buffer */
 		current_output = triple_buffer_get_write(&stream->output_triple);
 
-		if (stream->packing_enabled)
+		if (stream->framing_active || stream->packing_mode == HYDRASDR_PACKING_TIMESTAMP)
+		{
+			/* Strip chunk headers / counters; the carry keeps the DDC fed whole blocks */
+			if (stream->sample_type == HYDRASDR_SAMPLE_RAW)
+			{
+				sample_count = deframe_buffer(stream, (const uint8_t *)buffer_ptr, true);
+				input_samples = (uint16_t *)stream->deframed_raw;
+			}
+			else
+			{
+				sample_count = deframe_buffer(stream, (const uint8_t *)buffer_ptr, false);
+				input_samples = stream->deframed_samples;
+				deframed_count = sample_count;
+			}
+			if (sample_count == 0)
+			{
+				pthread_mutex_lock(&stream->consumer_mutex);
+				continue;
+			}
+		}
+		else if (stream->packing_mode == HYDRASDR_PACKING_8BIT)
+		{
+			/* One byte per sample: the top 8 bits, brought back to the 12-bit scale */
+			sample_count = stream->buffer_size;
+
+			if (stream->sample_type != HYDRASDR_SAMPLE_RAW)
+			{
+				const uint8_t *bytes = (const uint8_t *)buffer_ptr;
+				int i;
+				for (i = 0; i < sample_count; i++)
+					stream->unpacked_samples[i] = (uint16_t)(bytes[i] << 4);
+				input_samples = stream->unpacked_samples;
+			}
+		}
+		else if (stream->packing_enabled)
 		{
 			/* Packing only available for 12-bit mode (not 8-bit) */
 			sample_count = (((size_t)stream->buffer_size / 2) * 4) / 3;
@@ -871,6 +1114,12 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 		if (stream->callback(&transfer) != 0)
 		{
 			OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
+		}
+
+		/* The callback may have read the deframed samples in place: keep the carry only now */
+		if (deframed_count)
+		{
+			deframe_keep_carry(stream, (uint32_t)deframed_count);
 		}
 
 		/* Re-acquire mutex before checking queue again */
@@ -1133,6 +1382,8 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 	stream->transfer_count = transfer_count;
 	stream->buffer_size = buffer_size;
 	stream->packing_enabled = false;
+	stream->packing_mode = HYDRASDR_PACKING_16BIT;
+	stream->framing_requested = true;
 	stream->adc_bits = IQCONV_ADC_12BIT;	/* Default: 12-bit ADC (updated by firmware) */
 	stream->data_format = HYDRASDR_DATA_RAW_ADC;	/* Default: raw ADC (updated by firmware) */
 	OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
@@ -2204,18 +2455,253 @@ int hydrasdr_generic_set_packing(struct hydrasdr_device* dev, uint8_t value)
 		return HYDRASDR_ERROR_LIBUSB;
 	}
 
-	packing_enabled = (value == 1);
-	if (packing_enabled != stream->packing_enabled) {
+	packing_enabled = (value == HYDRASDR_PACKING_12BIT || value == HYDRASDR_PACKING_TIMESTAMP);
+	if (value != stream->packing_mode) {
 		hydrasdr_cancel_transfers(stream);
 		hydrasdr_free_transfers(stream);
 		stream->packing_enabled = packing_enabled;
-		stream->buffer_size = packing_enabled ? PACKED_BUFFER_SIZE : DEFAULT_BUFFER_SIZE;
+		stream->packing_mode = value;
+		stream->buffer_size = (value == HYDRASDR_PACKING_8BIT) ? BYTE_BUFFER_SIZE :
+			packing_enabled ? PACKED_BUFFER_SIZE : DEFAULT_BUFFER_SIZE;
 		result = hydrasdr_alloc_transfers(stream);
 		if (result != HYDRASDR_SUCCESS) {
 			return HYDRASDR_ERROR_NO_MEM;
 		}
 	}
 	return HYDRASDR_SUCCESS;
+}
+
+/*
+ * Stream metadata, timing and debug requests
+ */
+
+#define VENDOR_IN  ((uint8_t)LIBUSB_ENDPOINT_IN | (uint8_t)LIBUSB_REQUEST_TYPE_VENDOR | (uint8_t)LIBUSB_RECIPIENT_DEVICE)
+#define VENDOR_OUT ((uint8_t)LIBUSB_ENDPOINT_OUT | (uint8_t)LIBUSB_REQUEST_TYPE_VENDOR | (uint8_t)LIBUSB_RECIPIENT_DEVICE)
+
+static int send_framing(struct hydrasdr_device* dev, uint8_t value)
+{
+	uint8_t retval;
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_IN,
+		HYDRASDR_SET_FRAMING, 0, value ? 1 : 0, &retval, 1, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < 1) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+static int send_sof_divider(struct hydrasdr_device* dev, uint32_t divider)
+{
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_OUT,
+		HYDRASDR_SET_SOF_DIVIDER, (uint16_t)(divider & 0xFFFF), (uint16_t)(divider >> 16),
+		NULL, 0, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result != 0) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+/* Byte-swap a reply of little-endian uint32_t words in place */
+static void words_from_le(void* data, size_t bytes)
+{
+	uint32_t* words = (uint32_t*)data;
+	size_t i;
+	for (i = 0; i < bytes / sizeof(uint32_t); i++) {
+		words[i] = TO_LE_32(words[i]);
+	}
+}
+
+int hydrasdr_generic_set_framing(struct hydrasdr_device* dev, uint8_t value)
+{
+	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
+
+	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming)) {
+		return HYDRASDR_ERROR_BUSY;
+	}
+	stream->framing_requested = value ? true : false;
+	if (stream->framing_requested) {
+		/* Only checks the firmware supports it: hydrasdr_start_rx() asks again */
+		return send_framing(dev, 1);
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_transfer_get_metadata(hydrasdr_transfer_t* transfer, hydrasdr_transfer_metadata_t* metadata)
+{
+	hydrasdr_streaming_t* stream;
+
+	if (transfer == NULL || metadata == NULL || transfer->device == NULL) {
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+	stream = (hydrasdr_streaming_t*)transfer->device->private_data;
+	if (stream == NULL || !stream->framing_active || !stream->meta_valid) {
+		return HYDRASDR_ERROR_UNSUPPORTED;
+	}
+	*metadata = stream->meta;
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_get_stream_status(struct hydrasdr_device* dev, hydrasdr_stream_status_t* status)
+{
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_IN,
+		HYDRASDR_GET_STREAM_STATUS, 0, 0, (unsigned char*)status, (uint16_t)sizeof(*status),
+		LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < (int)sizeof(*status)) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	words_from_le(status, sizeof(*status));
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_set_sof_divider(struct hydrasdr_device* dev, uint32_t divider)
+{
+	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
+
+	stream->sof_divider = divider;
+	return send_sof_divider(dev, divider);
+}
+
+int hydrasdr_generic_set_uart_baud(struct hydrasdr_device* dev, uint32_t baud)
+{
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_OUT,
+		HYDRASDR_SET_UART_BAUD, (uint16_t)(baud & 0xFFFF), (uint16_t)(baud >> 16),
+		NULL, 0, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result != 0) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_uart_write(struct hydrasdr_device* dev, const uint8_t* data, uint16_t len)
+{
+	int result;
+
+	if (data == NULL || len == 0 || len > 64) {
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+	result = libusb_control_transfer(dev->usb_handle, VENDOR_OUT,
+		HYDRASDR_UART_WRITE, 0, 0, (unsigned char*)data, len, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < len) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_set_calibration(struct hydrasdr_device* dev, int32_t correction_ppb)
+{
+	uint32_t v = (uint32_t)correction_ppb;
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_OUT,
+		HYDRASDR_SET_CALIBRATION, (uint16_t)(v & 0xFFFF), (uint16_t)(v >> 16),
+		NULL, 0, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result != 0) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_get_calibration(struct hydrasdr_device* dev, hydrasdr_calibration_t* calibration)
+{
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_IN,
+		HYDRASDR_GET_CALIBRATION, 0, 0, (unsigned char*)calibration, (uint16_t)sizeof(*calibration),
+		LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < (int)sizeof(*calibration)) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	words_from_le(calibration, sizeof(*calibration));
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_watchdog(struct hydrasdr_device* dev, uint16_t feed, hydrasdr_watchdog_status_t* status)
+{
+	hydrasdr_watchdog_status_t local;
+	hydrasdr_watchdog_status_t* s = status ? status : &local;
+	int result = libusb_control_transfer(dev->usb_handle, VENDOR_IN,
+		HYDRASDR_WATCHDOG, 0, feed, (unsigned char*)s, (uint16_t)sizeof(*s), LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < (int)sizeof(*s)) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	words_from_le(s, sizeof(*s));
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_mem_read(struct hydrasdr_device* dev, uint32_t address, void* data, uint16_t len)
+{
+	int result;
+
+	if (data == NULL || len == 0 || len > 64) {
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+	result = libusb_control_transfer(dev->usb_handle, VENDOR_IN,
+		HYDRASDR_MEM_READ, (uint16_t)(address & 0xFFFF), (uint16_t)(address >> 16),
+		(unsigned char*)data, len, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < len) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_mem_write(struct hydrasdr_device* dev, uint32_t address, const void* data, uint16_t len)
+{
+	int result;
+
+	if (data == NULL || len == 0 || len > 64) {
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+	result = libusb_control_transfer(dev->usb_handle, VENDOR_OUT,
+		HYDRASDR_MEM_WRITE, (uint16_t)(address & 0xFFFF), (uint16_t)(address >> 16),
+		(unsigned char*)data, len, LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < len) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+	return HYDRASDR_SUCCESS;
+}
+
+int hydrasdr_generic_call(struct hydrasdr_device* dev, uint32_t core, uint32_t address, const uint32_t args[4], uint32_t* r0, uint32_t timeout_ms)
+{
+	hydrasdr_call_request_t req;
+	hydrasdr_call_result_t res;
+	uint32_t waited = 0;
+	int result;
+	int i;
+
+	if (args == NULL || r0 == NULL) {
+		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+	req.core = TO_LE_32(core);
+	req.address = TO_LE_32(address);
+	for (i = 0; i < 4; i++) {
+		req.r[i] = TO_LE_32(args[i]);
+	}
+	result = libusb_control_transfer(dev->usb_handle, VENDOR_OUT,
+		HYDRASDR_CALL, 0, 0, (unsigned char*)&req, (uint16_t)sizeof(req), LIBUSB_CTRL_TIMEOUT_MS);
+	if (result < (int)sizeof(req)) {
+		return HYDRASDR_ERROR_LIBUSB;
+	}
+
+	/* An M4 call runs in its main loop: poll until it is done */
+	for (;;) {
+		result = libusb_control_transfer(dev->usb_handle, VENDOR_IN,
+			HYDRASDR_CALL, 0, 0, (unsigned char*)&res, (uint16_t)sizeof(res), LIBUSB_CTRL_TIMEOUT_MS);
+		if (result < (int)sizeof(res)) {
+			return HYDRASDR_ERROR_LIBUSB;
+		}
+		res.status = TO_LE_32(res.status);
+		if (res.status == 0) {
+			*r0 = TO_LE_32(res.r0);
+			return HYDRASDR_SUCCESS;
+		}
+		if (res.status != 1) {
+			return HYDRASDR_ERROR_INVALID_PARAM;
+		}
+		if (waited >= timeout_ms) {
+			return HYDRASDR_ERROR_BUSY;
+		}
+#ifdef _WIN32
+		Sleep(1);
+#else
+		usleep(1000);
+#endif
+		waited++;
+	}
 }
 
 int hydrasdr_generic_set_rf_port(struct hydrasdr_device* dev, hydrasdr_rf_port_t rf_port)
@@ -3029,6 +3515,13 @@ int hydrasdr_generic_device_init(struct hydrasdr_device* dev,
 		return result;
 	}
 
+	{
+		const char* env_ppb = getenv("HYDRASDR_CALIBRATION_PPB");
+		if (env_ppb != NULL) {
+			hydrasdr_generic_set_calibration(dev, (int32_t)strtol(env_ppb, NULL, 10));
+		}
+	}
+
 	return HYDRASDR_SUCCESS;
 }
 
@@ -3052,6 +3545,23 @@ int hydrasdr_generic_start_rx(struct hydrasdr_device* dev,
 	result = hydrasdr_generic_set_receiver_mode(dev, HYDRASDR_RECEIVER_MODE_OFF);
 	if (result != HYDRASDR_SUCCESS) {
 		return result;
+	}
+
+	/* The device drops framing and SOF tagging at every stop: ask again */
+	{
+		hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
+
+		deframe_reset(stream);
+		stream->framing_active = false;
+		if (stream->framing_requested) {
+			stream->framing_active = (send_framing(dev, 1) == HYDRASDR_SUCCESS);
+		}
+		if (stream->sof_divider != 0) {
+			result = send_sof_divider(dev, stream->sof_divider);
+			if (result != HYDRASDR_SUCCESS) {
+				return result;
+			}
+		}
 	}
 
 	result = hydrasdr_generic_set_receiver_mode(dev, HYDRASDR_RECEIVER_MODE_RX);

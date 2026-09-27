@@ -246,6 +246,24 @@ uint64_t bytes_to_xfer = 0;
 bool call_set_packing = false;
 uint32_t packing_val = 0;
 
+/* Stream metadata and timing (firmware with framed chunks) */
+bool framing_given = false;
+uint32_t framing_val = 1;
+uint32_t watchdog_val = 0;
+bool uart_baud_given = false;
+uint32_t uart_baud_val = 0;
+uint32_t print_uart_val = 0;
+bool sof_given = false;
+uint32_t sof_divider_val = 0;
+bool calibration_given = false;
+int32_t calibration_val = 0;
+hydrasdr_transfer_metadata_t frame_meta;   /* last block's, written by the callback */
+volatile uint32_t frame_blocks = 0;
+uint64_t frame_gap_samples = 0;
+uint64_t frame_duplicate_chunks = 0;
+uint32_t uart_bytes_total = 0;
+uint32_t sof_tags_total = 0;
+
 bool sample_rate = false;
 uint32_t sample_rate_val = 0;  /* Default to index 0 (first supported rate) */
 
@@ -453,14 +471,41 @@ int rx_callback(hydrasdr_transfer_t* transfer)
 	if (transfer->dropped_samples)
 		ATOMIC_ADD64(&total_dropped_samples, transfer->dropped_samples);
 
+	/* Framed streams: sample counters, PPS, USB SOF tags and UART bytes */
+	{
+		hydrasdr_transfer_metadata_t meta;
+		if (hydrasdr_transfer_get_metadata(transfer, &meta) == HYDRASDR_SUCCESS) {
+			uint32_t i;
+			frame_gap_samples += meta.gap_samples;
+			frame_duplicate_chunks += meta.duplicate_chunks;
+			sof_tags_total += meta.sof_tags_len;
+			if (verbose) {
+				for (i = 0; i < meta.sof_tags_len; i++) {
+					const hydrasdr_sof_tag_t* tag = &meta.sof_tags[i];
+					fprintf(stderr, "SOF %u: frame %u at sample %llu + %.4f\n",
+						tag->count, tag->frame, (unsigned long long)tag->sample_index, tag->fraction / 4294967296.0);
+				}
+			}
+			if (meta.uart_len) {
+				uart_bytes_total += meta.uart_len;
+				if (print_uart_val)
+					fwrite(meta.uart_data, 1, meta.uart_len, stderr);
+			}
+			frame_meta = meta;
+			frame_blocks++;
+		}
+	}
+
 	if (fd == NULL)
 		return -1;
 
 	/* Calculate bytes using transfer's sample_type (hardware-agnostic) */
 	const size_t bps = bytes_per_sample(transfer->sample_type);
 
-	/* Handle RAW mode with packing (12-bit packed) */
-	if (transfer->sample_type == HYDRASDR_SAMPLE_RAW && packing_val) {
+	/* Handle RAW mode with packing (12-bit packed, or one byte per sample) */
+	if (transfer->sample_type == HYDRASDR_SAMPLE_RAW && packing_val == HYDRASDR_PACKING_8BIT) {
+		bytes_to_write = (size_t)transfer->sample_count;
+	} else if (transfer->sample_type == HYDRASDR_SAMPLE_RAW && packing_val) {
 		bytes_to_write = (size_t)transfer->sample_count * INT12_EL_SIZE_BITS / INT8_EL_SIZE_BITS;
 	} else {
 		bytes_to_write = (size_t)transfer->sample_count * bps;
@@ -520,8 +565,14 @@ static void usage_static(void)
 	fprintf(stderr, "-w Receive data into file with WAV header and automatic name\n");
 	fprintf(stderr, " This is for SDR++ compatibility and may not work with other software\n");
 	fprintf(stderr, "[-s serial_number_64bits]: Open device with specified 64bits serial number\n");
-	fprintf(stderr, "[-p packing]: Set packing for samples, \n");
-	fprintf(stderr, " 1=enabled(12bits packed), 0=disabled(default 16bits not packed)\n");
+	fprintf(stderr, "[-p packing]: 0=16bits not packed(default), 1=12bits packed,\n");
+	fprintf(stderr, " 2=12bits packed with a chunk counter, 3=8bits (top 8 bits, half the USB bandwidth of 1)\n");
+	fprintf(stderr, "[-H framing]: Framed chunks with sample counters, 1=enabled(default, if the firmware supports it), 0=disabled\n");
+	fprintf(stderr, "[-S sof_divider]: Tag the USB Start-Of-Frame of every frame (1 ms) whose number is a multiple of this\n");
+	fprintf(stderr, " with its sample index, 0=off(default); -d prints every tag\n");
+	fprintf(stderr, "[-U baud]: Baud rate of the auxiliary UART (e.g. a GNSS module), [-N 1]: print the bytes it receives\n");
+	fprintf(stderr, "[-C ppb]: Crystal correction in ppb, until the device resets\n");
+	fprintf(stderr, "[-W watchdog]: 1=feed the device watchdog every second and show its state, 0=disabled(default)\n");
 	fprintf(stderr, "[-f frequency_MHz]: Set frequency in MHz (device-specific range)\n");
 	fprintf(stderr, "[-a sample_rate]: Set sample rate\n");
 	fprintf(stderr, "[-B bandwidth]: Set bandwidth (if supported by device)\n");
@@ -554,8 +605,14 @@ static void usage_dynamic(const hydrasdr_device_info_t *info)
 	fprintf(stderr, "-w Receive data into file with WAV header and automatic name\n");
 	fprintf(stderr, " This is for SDR++ compatibility and may not work with other software\n");
 	fprintf(stderr, "[-s serial_number_64bits]: Open device with specified 64bits serial number\n");
-	fprintf(stderr, "[-p packing]: Set packing for samples, \n");
-	fprintf(stderr, " 1=enabled(12bits packed), 0=disabled(default 16bits not packed)\n");
+	fprintf(stderr, "[-p packing]: 0=16bits not packed(default), 1=12bits packed,\n");
+	fprintf(stderr, " 2=12bits packed with a chunk counter, 3=8bits (top 8 bits, half the USB bandwidth of 1)\n");
+	fprintf(stderr, "[-H framing]: Framed chunks with sample counters, 1=enabled(default, if the firmware supports it), 0=disabled\n");
+	fprintf(stderr, "[-S sof_divider]: Tag the USB Start-Of-Frame of every frame (1 ms) whose number is a multiple of this\n");
+	fprintf(stderr, " with its sample index, 0=off(default); -d prints every tag\n");
+	fprintf(stderr, "[-U baud]: Baud rate of the auxiliary UART (e.g. a GNSS module), [-N 1]: print the bytes it receives\n");
+	fprintf(stderr, "[-C ppb]: Crystal correction in ppb, until the device resets\n");
+	fprintf(stderr, "[-W watchdog]: 1=feed the device watchdog every second and show its state, 0=disabled(default)\n");
 	fprintf(stderr, "[-f frequency_MHz]: Set frequency in MHz between [%.1f, %.1f]\n",
 		(double)info->min_frequency / 1e6,
 		(double)info->max_frequency / 1e6);
@@ -763,7 +820,7 @@ int main(int argc, char** argv)
 		return EXIT_SUCCESS;
 	}
 
-	while( (opt = getopt(argc, argv, "r:ws:p:f:a:B:t:P:b:v:m:l:R:F:g:i:D:n:d")) != EOF )
+	while( (opt = getopt(argc, argv, "r:ws:p:H:S:U:N:C:W:f:a:B:t:P:b:v:m:l:R:F:g:i:D:n:d")) != EOF )
 	{
 		result = HYDRASDR_SUCCESS;
 		switch( opt )
@@ -786,8 +843,10 @@ int main(int argc, char** argv)
 				result = parse_u32(optarg, &packing_val_u32);
 				switch (packing_val_u32)
 				{
-					case 0:
-					case 1:
+					case HYDRASDR_PACKING_16BIT:
+					case HYDRASDR_PACKING_12BIT:
+					case HYDRASDR_PACKING_TIMESTAMP:
+					case HYDRASDR_PACKING_8BIT:
 						packing_val = packing_val_u32;
 						call_set_packing = true;
 					break;
@@ -798,6 +857,38 @@ int main(int argc, char** argv)
 						call_set_packing = false;
 					break;
 				}
+			break;
+
+			case 'H': /* framing */
+				framing_given = true;
+				result = parse_u32(optarg, &framing_val);
+				if (result == HYDRASDR_SUCCESS && framing_val > 1)
+					result = HYDRASDR_ERROR_INVALID_PARAM;
+			break;
+
+			case 'S': /* USB SOF tagging divider */
+				sof_given = true;
+				result = parse_u32(optarg, &sof_divider_val);
+			break;
+
+			case 'U': /* auxiliary UART baud rate */
+				uart_baud_given = true;
+				result = parse_u32(optarg, &uart_baud_val);
+			break;
+
+			case 'N': /* print UART bytes */
+				result = parse_u32(optarg, &print_uart_val);
+			break;
+
+			case 'C': /* crystal correction in ppb */
+				calibration_given = true;
+				calibration_val = (int32_t)strtol(optarg, NULL, 10);
+			break;
+
+			case 'W': /* watchdog */
+				result = parse_u32(optarg, &watchdog_val);
+				if (result == HYDRASDR_SUCCESS && watchdog_val > 1)
+					result = HYDRASDR_ERROR_INVALID_PARAM;
 			break;
 
 			case 'f':
@@ -1428,6 +1519,30 @@ int main(int argc, char** argv)
 		}
 	}
 
+	if (calibration_given) {
+		result = hydrasdr_set_calibration(device, calibration_val);
+		if (result != HYDRASDR_SUCCESS)
+			fprintf(stderr, "hydrasdr_set_calibration() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+	}
+	if (uart_baud_given) {
+		result = hydrasdr_set_uart_baud(device, uart_baud_val);
+		if (result != HYDRASDR_SUCCESS)
+			fprintf(stderr, "hydrasdr_set_uart_baud() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+	}
+	if (sof_given) {
+		result = hydrasdr_set_sof_divider(device, sof_divider_val);
+		if (result != HYDRASDR_SUCCESS)
+			fprintf(stderr, "hydrasdr_set_sof_divider() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+	}
+	if (framing_given) {
+		result = hydrasdr_set_framing(device, (uint8_t)framing_val);
+		if (result != HYDRASDR_SUCCESS) {
+			fprintf(stderr, "hydrasdr_set_framing() failed: %s (%d)\n", hydrasdr_error_name(result), result);
+			hydrasdr_close(device);
+			return EXIT_FAILURE;
+		}
+	}
+
 	result = hydrasdr_set_rf_bias(device, biast_val);
 	if( result != HYDRASDR_SUCCESS ) {
 		fprintf(stderr, "hydrasdr_set_rf_bias() failed: %s (%d)\n", hydrasdr_error_name(result), result);
@@ -1598,6 +1713,50 @@ int main(int argc, char** argv)
 			}
 		} else {
 			fprintf(stderr, "Streaming at %5s MSPS\n", str);
+		}
+
+		{
+			hydrasdr_stream_status_t status;
+			if (hydrasdr_get_stream_status(device, &status) == HYDRASDR_SUCCESS) {
+				fprintf(stderr, "Device ring: backlog max %u of %u chunks (device queue lag max %u), lost %u, overruns %u, "
+					"dma errors %u, usb errors %u, adc overflows %u, pps %u, sof %u tagged of %u (divider %u)\n",
+					status.backlog_max, status.ring_chunks, status.m0_lag_max, status.lost, status.overruns,
+					status.dma_errors, status.usb_errors, status.adc_overflows, status.pps_count,
+					status.sof_count, status.sof_edges, status.sof_divider);
+			}
+		}
+		if (watchdog_val) {
+			hydrasdr_watchdog_status_t wd;
+			if (hydrasdr_watchdog_feed(device, &wd) == HYDRASDR_SUCCESS) {
+				if (wd.flags & HYDRASDR_WATCHDOG_FLAG_ARMED)
+					fprintf(stderr, "Watchdog: armed%s%s, timeout %u ms, %u ms were left before this feed%s\n",
+						(wd.flags & HYDRASDR_WATCHDOG_FLAG_STRICT) ? ", strict" : ", relaxed",
+						(wd.flags & HYDRASDR_WATCHDOG_FLAG_HOST_OWNED) ? ", host in charge" : "",
+						wd.timeout_ms, wd.remaining_ms,
+						(wd.flags & HYDRASDR_WATCHDOG_FLAG_RESET_BY_WATCHDOG) ? ", last reset was the watchdog" : "");
+				else
+					fprintf(stderr, "Watchdog: not built into this firmware\n");
+			}
+		}
+		if (frame_blocks) {
+			/* Sample indices count real ADC samples since the stream started */
+			hydrasdr_transfer_metadata_t meta = frame_meta;
+			fprintf(stderr, "Frames: sample index %llu, gap samples %llu, duplicate chunks %llu, sync errors %u, "
+				"chunks per block %u, freq %u Hz\n",
+				(unsigned long long)meta.sample_index, (unsigned long long)frame_gap_samples,
+				(unsigned long long)frame_duplicate_chunks, meta.sync_errors, meta.chunks, meta.freq_hz);
+			if (packing_val == HYDRASDR_PACKING_TIMESTAMP)
+				fprintf(stderr, "ADC status bits of the last block: 0x%03x\n", meta.adc_status);
+			if (meta.pps_count) {
+				fprintf(stderr, "PPS: %u edges, last at sample %llu + %.4f, uart bytes %u\n",
+					meta.pps_count, (unsigned long long)meta.pps_sample_index,
+					meta.pps_fraction / 4294967296.0, uart_bytes_total);
+			}
+			if (meta.sof_count) {
+				fprintf(stderr, "SOF: %u tagged, %u received, last: frame %u at sample %llu + %.4f\n",
+					meta.sof_count, sof_tags_total, meta.sof_frame,
+					(unsigned long long)meta.sof_sample_index, meta.sof_fraction / 4294967296.0);
+			}
 		}
 
 		if ((limit_num_samples == true) && (bytes_to_xfer == 0))

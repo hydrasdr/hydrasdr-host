@@ -477,7 +477,7 @@ static int rfone_get_device_info(struct hydrasdr_device* dev,
 			info->current_decimation_factor = stream->decimation_factor;
 			info->current_decimation_mode = (uint8_t)stream->decimation_mode;
 			info->current_sample_type = (uint32_t)stream->sample_type;
-			info->current_packing = stream->packing_enabled ? 1 : 0;
+			info->current_packing = stream->packing_mode;
 			info->bandwidth_auto_selected = stream->bandwidth_explicitly_set ? 0 : 1;
 			info->current_adc_bits = stream->adc_bits;
 		}
