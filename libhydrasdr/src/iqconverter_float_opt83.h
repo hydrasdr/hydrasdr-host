@@ -20,6 +20,7 @@
 #define IQCONVERTER_FLOAT_OPT83_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,6 +95,7 @@ void iqconverter_float_opt83_reset(iqconverter_float_opt83_t *cnv);
  * Note: Delay (21 samples) is not power-of-2, uses conditional branch
  */
 void iqconverter_float_opt83_process_u16(iqconverter_float_opt83_t *cnv,
+					 const iqconv_lut_t *table,
 					 const uint16_t *src,
 					 float *dest, int len);
 

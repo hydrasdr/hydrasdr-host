@@ -42,12 +42,14 @@
 /* Threading timeout constants (microseconds) */
 #define TRANSFER_THREAD_TIMEOUT_US (100000)  /* 100ms - fast response to stop */
 #define EVENT_DRAIN_TIMEOUT_US (50000)       /* 50ms - event drain per iteration */
-#define EVENT_DRAIN_ITERATIONS (2)           /* Number of drain iterations */
+#define EVENT_DRAIN_ITERATIONS (20)          /* One-second bounded drain */
+#define CONSUMER_HOLD_POLL_MS (1)            /* Hold poll while the consumer is busy (ms) */
 
 /* Buffer size constants */
 #define DEFAULT_BUFFER_SIZE (262144)              /* 256KB - default USB buffer size */
 #define PACKED_BUFFER_SIZE (6144 * 24)            /* 147KB - packed mode buffer size */
 #define MAX_SUPPORTED_RATE_COUNT (100)            /* Sanity limit for rate/bandwidth arrays */
+#define LIBUSB_DLL_NAME "libusb-1.0.dll"          /* libusb DLL name (Windows) */
 
 /* Version string buffer size */
 #define VERSION_STRING_SIZE (128)
@@ -74,6 +76,7 @@ typedef struct {
 	uint32_t buffer_size;
 	bool packing_enabled;
 	uint8_t adc_bits;	/* ADC bit depth from firmware: 8, 10, 12, 14, or 16 */
+	const iqconv_lut_t *lut;	/* Conversion table of adc_bits */
 	uint8_t data_format;	/* Data format from firmware: RAW_ADC or IQ_DIRECT */
 	enum hydrasdr_sample_type sample_type;
 	struct hydrasdr_device* dev;
@@ -152,13 +155,16 @@ typedef struct {
 	 * Written by: USB callback thread
 	 * Read by: Consumer thread
 	 *
-	 * IMPORTANT: streaming and stop_requested use atomic operations
-	 * via OPT_ATOMIC_LOAD_ACQ/OPT_ATOMIC_STORE_REL for thread safety.
+	 * IMPORTANT: streaming, stop_requested, active_transfers and
+	 * consumer_busy use atomics via OPT_ATOMIC_LOAD_ACQ/OPT_ATOMIC_STORE_REL
+	 * for thread safety.
 	 */
 	OPT_ALIGN(OPT_CACHE_LINE_SIZE) struct {
 		uint32_t dropped_buffers;         /* Overflow counter */
 		uint32_t streaming;               /* Streaming active flag (atomic) */
 		uint32_t stop_requested;          /* Stop request flag (atomic) */
+		uint32_t active_transfers;        /* Submitted libusb transfers (atomic) */
+		uint32_t consumer_busy;           /* Consumer thread inside a buffer (atomic, written by the consumer) */
 	} usb_hot;
 
 	/*
@@ -167,6 +173,9 @@ typedef struct {
 	 */
 	pthread_mutex_t consumer_mutex;
 	pthread_cond_t consumer_cond;
+	pthread_t consumer_self;              /* Consumer thread id */
+	uint32_t consumer_self_set;           /* consumer_self valid (atomic) */
+	uint32_t hold_requested;              /* A control call waits for the consumer (atomic) */
 
 	/*
 	 * ---- Statistics (own cache line) ----

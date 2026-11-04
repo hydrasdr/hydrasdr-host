@@ -137,6 +137,7 @@ static void hydrasdr_open_exit(struct hydrasdr_device* device)
 
 static int verify_and_claim_device(struct hydrasdr_device* dev_wrapper, libusb_device* usb_dev) {
 	int result;
+	int configuration = 0;
 	char fw_version[255 + 1];
 	bool interface_claimed = false;
 
@@ -151,10 +152,14 @@ static int verify_and_claim_device(struct hydrasdr_device* dev_wrapper, libusb_d
 	}
 #endif
 
-	result = libusb_set_configuration(dev_wrapper->usb_handle, 1);
-	if (result != 0) {
-		result = HYDRASDR_ERROR_LIBUSB;
-		goto cleanup;
+	/* Set configuration 1 only if needed (setting it again resets the device) */
+	result = libusb_get_configuration(dev_wrapper->usb_handle, &configuration);
+	if (result != 0 || configuration != 1) {
+		result = libusb_set_configuration(dev_wrapper->usb_handle, 1);
+		if (result != 0) {
+			result = HYDRASDR_ERROR_LIBUSB;
+			goto cleanup;
+		}
 	}
 
 	result = libusb_claim_interface(dev_wrapper->usb_handle, 0);
@@ -275,6 +280,7 @@ static void hydrasdr_open_device_fd(struct hydrasdr_device* device, int* ret, in
 {
 #ifdef __ANDROID__
 	int result;
+	int configuration = 0;
 	struct libusb_device_descriptor desc;
 	const hydrasdr_device_entry_t *entry;
 	char fw_version[255 + 1];
@@ -292,13 +298,16 @@ static void hydrasdr_open_device_fd(struct hydrasdr_device* device, int* ret, in
 		libusb_detach_kernel_driver(device->usb_handle, 0);
 	}
 
-	/* Set configuration and claim interface */
-	result = libusb_set_configuration(device->usb_handle, 1);
-	if (result != 0) {
-		libusb_close(device->usb_handle);
-		device->usb_handle = NULL;
-		*ret = HYDRASDR_ERROR_LIBUSB;
-		return;
+	/* Set configuration 1 only if needed, and claim interface */
+	result = libusb_get_configuration(device->usb_handle, &configuration);
+	if (result != 0 || configuration != 1) {
+		result = libusb_set_configuration(device->usb_handle, 1);
+		if (result != 0) {
+			libusb_close(device->usb_handle);
+			device->usb_handle = NULL;
+			*ret = HYDRASDR_ERROR_LIBUSB;
+			return;
+		}
 	}
 
 	result = libusb_claim_interface(device->usb_handle, 0);

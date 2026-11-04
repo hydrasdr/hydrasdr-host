@@ -1,3 +1,21 @@
+hydrasdr-host (1.1.4-1) unstable; urgency=medium
+
+  * Int16 DDC: saturate near ADC full scale instead of wrapping to the
+    opposite sign (Float32 is not affected).
+  * Conversion tables cover every 16-bit word (no more undefined shifts).
+  * Windows: WinUSB RAW_IO with libusb 1.0.30 or later, for more USB
+    throughput on a slow PC (an older libusb works as before).
+  * Fix a crash on macOS when the device is unplugged while streaming.
+  * Fix a crash when the sample rate changes while streaming; rate and
+    bandwidth changes no longer reset the USB endpoint.
+  * Stop and close wait for every USB transfer, a start, packing or sample
+    type change while streaming returns HYDRASDR_ERROR_BUSY.
+  * Open no longer resets a device that is already configured (spiflash
+    requests time out instead of blocking).
+  * hydrasdr_rx: unpacked RAW captures write the number of samples asked.
+
+ -- Benjamin Vernoux <bvernoux@hydrasdr.com>  Tue, 04 Nov 2026 12:00:00 +0100
+
 hydrasdr-host (1.1.3-1) unstable; urgency=medium
 
   * Windows ARM64 and ARM64EC support (MSVC builds).

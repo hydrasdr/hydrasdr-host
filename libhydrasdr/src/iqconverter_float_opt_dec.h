@@ -72,6 +72,7 @@ void iqconverter_float_opt_dec_reset(iqconverter_float_opt_dec_t *cnv);
  *               (len / decimation_factor * 2 floats)
  */
 void iqconverter_float_opt_dec_process_u16(iqconverter_float_opt_dec_t *cnv,
+					   const iqconv_lut_t *table,
 					   const uint16_t *src,
 					   float *dest, int len);
 

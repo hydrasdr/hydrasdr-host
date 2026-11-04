@@ -8,7 +8,7 @@
  *   - 14-bit ADC: 16384 entries
  *   - 16-bit ADC: 65536 entries
  *
- * Tables are dynamically allocated at runtime based on configured ADC bits.
+ * One table per ADC width, built on first use and never rewritten.
  *
  * Copyright (C) 2025-2026, Benjamin Vernoux <bvernoux@hydrasdr.com>
  *
@@ -53,12 +53,18 @@ typedef struct {
 } iqconv_lut_t;
 
 /*
- * Global LUT instance (initialized at startup)
+ * Default table, for converters used without a device (iqconverter_process)
  */
 extern iqconv_lut_t iqconv_lut;
 
 /*
- * Initialize lookup tables for specified ADC bit depth
+ * Table of one ADC width (8, 10, 12, 14, or 16), built on first use and
+ * never rewritten; NULL on an invalid width or allocation failure.
+ */
+const iqconv_lut_t *iqconv_lut_get(int adc_bits);
+
+/*
+ * Select the default table for specified ADC bit depth
  *
  * Parameters:
  *   adc_bits - ADC bit depth (8, 10, 12, 14, or 16)
@@ -74,12 +80,7 @@ extern iqconv_lut_t iqconv_lut;
  *            Scale chosen to maximize int16 range without overflow
  *            8-bit: << 8, 10-bit: << 6, 12-bit: << 4, 14-bit: << 2, 16-bit: << 0
  *
- * Memory usage:
- *   8-bit:  256 * 6 = 1.5 KB
- *   10-bit: 1024 * 6 = 6 KB
- *   12-bit: 4096 * 6 = 24 KB (fits in L1 cache)
- *   14-bit: 16384 * 6 = 96 KB (fits in L2 cache)
- *   16-bit: 65536 * 6 = 384 KB
+ * Memory usage: 65536 * 6 = 384 KB per width in use
  *
  * Example:
  *   iqconv_lut_init(IQCONV_ADC_12BIT);  // Initialize for 12-bit ADC
@@ -88,7 +89,7 @@ extern iqconv_lut_t iqconv_lut;
 int iqconv_lut_init(int adc_bits);
 
 /*
- * Free lookup tables and reset state
+ * Free every table and reset the default; only while no converter uses one
  */
 void iqconv_lut_free(void);
 

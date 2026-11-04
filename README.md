@@ -463,6 +463,8 @@ make && sudo make install
 
 MSVC builds automatically download libusb 1.0.30. For other platforms, avoid libusb v1.0.24 due to known issues.
 
+On Windows the library reads the device through WinUSB RAW_IO when the libusb-1.0.dll it runs with is 1.0.30 or later, and through the WinUSB queue with an older one.
+
 ---
 
 ## License

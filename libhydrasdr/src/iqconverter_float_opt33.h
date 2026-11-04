@@ -20,6 +20,7 @@
 #define IQCONVERTER_FLOAT_OPT33_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,6 +98,7 @@ void iqconverter_float_opt33_reset(iqconverter_float_opt33_t *cnv);
  *   dly_idx = (dly_idx + 1) & 7;  // No branch!
  */
 void iqconverter_float_opt33_process_u16(iqconverter_float_opt33_t *cnv,
+					 const iqconv_lut_t *table,
 					 const uint16_t *src,
 					 float *dest, int len);
 

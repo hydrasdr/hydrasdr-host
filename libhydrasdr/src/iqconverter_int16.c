@@ -23,6 +23,7 @@ THE SOFTWARE.
 */
 
 #include "iqconverter_int16.h"
+#include "iqconverter_common.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -125,7 +126,7 @@ static void fir_interleaved(iqconverter_int16_t *cnv, int16_t *samples, int len)
 			memcpy(cnv->fir_queue + fir_index + 1, cnv->fir_queue, (cnv->len - 1) * sizeof(int32_t));
 		}
 
-		samples[i] = acc >> 15;
+		samples[i] = SAT_I16(acc >> 15);
 	}
 
 	cnv->fir_index = fir_index;
@@ -160,7 +161,7 @@ static void remove_dc(iqconverter_int16_t *cnv, int16_t *samples, int len)
 {
 	int i;
 	int32_t u, old_e;
-	int16_t x, y, w, s, old_x, old_y;
+	int16_t x, y, s, old_x, old_y;
 
 	old_x = cnv->old_x;
 	old_y = cnv->old_y;
@@ -169,11 +170,10 @@ static void remove_dc(iqconverter_int16_t *cnv, int16_t *samples, int len)
 	for (i = 0; i < len; i++)
 	{
 		x = samples[i];
-		w = x - old_x;
 		u = old_e + (int32_t) old_y * 32100;
 		s = u >> 15;
-		y = w + s;
-		old_e = u - (s << 15);
+		y = SAT_I16((int32_t) x - old_x + s);
+		old_e = u - (int32_t) s * (1 << 15);
 		old_x = x;
 		old_y = y;		
 		samples[i] = y;
@@ -190,7 +190,7 @@ static void translate_fs_4(iqconverter_int16_t *cnv, int16_t *samples, int len)
 
 	for (i = 0; i < len; i += 4)
 	{
-		samples[i + 0] = -samples[i + 0];
+		samples[i + 0] = SAT_I16(-(int32_t) samples[i + 0]);
 		samples[i + 1] = -samples[i + 1] >> 1;
 		//samples[i + 2] = samples[i + 2];
 		samples[i + 3] = samples[i + 3] >> 1;

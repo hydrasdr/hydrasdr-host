@@ -11,6 +11,7 @@
 #ifndef IQCONVERTER_COMMON_H
 #define IQCONVERTER_COMMON_H
 
+#include <stdint.h>
 #include "compat_opt.h"
 
 /*
@@ -45,6 +46,15 @@
  * DC_ALPHA_Q15 = 32100 ~ 0.979 gives fast DC tracking
  */
 #define DC_ALPHA_Q15 32100
+
+/*
+ * Int16 Saturation
+ * Clamp to int16 instead of wrapping near full scale
+ */
+#define SAT_I16(x) ( \
+	((x) > 32767) ? (int16_t)32767 : \
+	(((x) < -32768) ? (int16_t)-32768 : (int16_t)(x)) \
+)
 
 /*
  * Int16 FIR Circular Buffer Configuration

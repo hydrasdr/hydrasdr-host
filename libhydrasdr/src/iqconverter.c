@@ -61,8 +61,8 @@ struct iqconverter_s {
 #define FREE_FN(fn)        ((void (*)(void *))(fn))
 #define RESET_FN(fn)       ((void (*)(void *))(fn))
 #define PROCESS_FN(fn)     ((void (*)(void *, void *, int))(fn))
-#define PROCESS_U16_FN(fn) ((void (*)(void *, const void *, void *, int))(fn))
-#define PROCESS_U8_FN(fn)  ((void (*)(void *, const void *, void *, int))(fn))
+#define PROCESS_U16_FN(fn) ((void (*)(void *, const iqconv_lut_t *, const void *, void *, int))(fn))
+#define PROCESS_U8_FN(fn)  ((void (*)(void *, const iqconv_lut_t *, const void *, void *, int))(fn))
 
 /* Int16 Legacy Algorithm */
 static const iqconv_algorithm_t algo_int16_legacy = {
@@ -466,12 +466,20 @@ IQCONV_API void IQCONV_CALL iqconverter_process(iqconverter_t *cnv,
 						const uint16_t *src,
 						void *dest, int len)
 {
-	if (!cnv || !cnv->algo || !cnv->ctx || !src || !dest)
+	iqconverter_process_lut(cnv, &iqconv_lut, src, dest, len);
+}
+
+IQCONV_API void IQCONV_CALL iqconverter_process_lut(iqconverter_t *cnv,
+						    const iqconv_lut_t *table,
+						    const uint16_t *src,
+						    void *dest, int len)
+{
+	if (!cnv || !cnv->algo || !cnv->ctx || !table || !src || !dest)
 		return;
 
 	/* Path 1: Fused processing (optimized algorithms) */
 	if (cnv->algo->process_u16) {
-		cnv->algo->process_u16(cnv->ctx, src, dest, len);
+		cnv->algo->process_u16(cnv->ctx, table, src, dest, len);
 		return;
 	}
 
@@ -484,10 +492,10 @@ IQCONV_API void IQCONV_CALL iqconverter_process(iqconverter_t *cnv,
 			float *out = (float *)dest;
 
 			for (i = 0; i < len; i += 4) {
-				out[i + 0] = IQCONV_LUT_F32(src[i + 0]);
-				out[i + 1] = IQCONV_LUT_F32(src[i + 1]);
-				out[i + 2] = IQCONV_LUT_F32(src[i + 2]);
-				out[i + 3] = IQCONV_LUT_F32(src[i + 3]);
+				out[i + 0] = table->lut_float32[src[i + 0]];
+				out[i + 1] = table->lut_float32[src[i + 1]];
+				out[i + 2] = table->lut_float32[src[i + 2]];
+				out[i + 3] = table->lut_float32[src[i + 3]];
 			}
 
 			/* Process in-place */
@@ -497,10 +505,10 @@ IQCONV_API void IQCONV_CALL iqconverter_process(iqconverter_t *cnv,
 			int16_t *out = (int16_t *)dest;
 
 			for (i = 0; i < len; i += 4) {
-				out[i + 0] = IQCONV_LUT_I16(src[i + 0]);
-				out[i + 1] = IQCONV_LUT_I16(src[i + 1]);
-				out[i + 2] = IQCONV_LUT_I16(src[i + 2]);
-				out[i + 3] = IQCONV_LUT_I16(src[i + 3]);
+				out[i + 0] = table->lut_int16[src[i + 0]];
+				out[i + 1] = table->lut_int16[src[i + 1]];
+				out[i + 2] = table->lut_int16[src[i + 2]];
+				out[i + 3] = table->lut_int16[src[i + 3]];
 			}
 
 			/* Process in-place */
@@ -513,16 +521,24 @@ IQCONV_API void IQCONV_CALL iqconverter_process_u8(iqconverter_t *cnv,
 						   const uint8_t *src,
 						   void *dest, int len)
 {
-	if (!cnv || !cnv->algo || !cnv->ctx || !src || !dest)
+	iqconverter_process_u8_lut(cnv, &iqconv_lut, src, dest, len);
+}
+
+IQCONV_API void IQCONV_CALL iqconverter_process_u8_lut(iqconverter_t *cnv,
+						       const iqconv_lut_t *table,
+						       const uint8_t *src,
+						       void *dest, int len)
+{
+	if (!cnv || !cnv->algo || !cnv->ctx || !table || !src || !dest)
 		return;
 
 	/* Validate LUT is initialized for 8-bit ADC */
-	if (iqconv_lut.adc_bits != IQCONV_ADC_8BIT)
+	if (table->adc_bits != IQCONV_ADC_8BIT)
 		return;
 
 	/* Path 1: Fused processing (optimized algorithms with 8-bit support) */
 	if (cnv->algo->process_u8) {
-		cnv->algo->process_u8(cnv->ctx, src, dest, len);
+		cnv->algo->process_u8(cnv->ctx, table, src, dest, len);
 		return;
 	}
 
@@ -538,10 +554,10 @@ IQCONV_API void IQCONV_CALL iqconverter_process_u8(iqconverter_t *cnv,
 			float *out = (float *)dest;
 
 			for (i = 0; i < len; i += 4) {
-				out[i + 0] = IQCONV_LUT_F32(src[i + 0]);
-				out[i + 1] = IQCONV_LUT_F32(src[i + 1]);
-				out[i + 2] = IQCONV_LUT_F32(src[i + 2]);
-				out[i + 3] = IQCONV_LUT_F32(src[i + 3]);
+				out[i + 0] = table->lut_float32[src[i + 0]];
+				out[i + 1] = table->lut_float32[src[i + 1]];
+				out[i + 2] = table->lut_float32[src[i + 2]];
+				out[i + 3] = table->lut_float32[src[i + 3]];
 			}
 
 			/* Process in-place */
@@ -551,10 +567,10 @@ IQCONV_API void IQCONV_CALL iqconverter_process_u8(iqconverter_t *cnv,
 			int16_t *out = (int16_t *)dest;
 
 			for (i = 0; i < len; i += 4) {
-				out[i + 0] = IQCONV_LUT_I16(src[i + 0]);
-				out[i + 1] = IQCONV_LUT_I16(src[i + 1]);
-				out[i + 2] = IQCONV_LUT_I16(src[i + 2]);
-				out[i + 3] = IQCONV_LUT_I16(src[i + 3]);
+				out[i + 0] = table->lut_int16[src[i + 0]];
+				out[i + 1] = table->lut_int16[src[i + 1]];
+				out[i + 2] = table->lut_int16[src[i + 2]];
+				out[i + 3] = table->lut_int16[src[i + 3]];
 			}
 
 			/* Process in-place */

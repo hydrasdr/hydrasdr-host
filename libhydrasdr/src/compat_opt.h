@@ -536,6 +536,13 @@ static OPT_INLINE void opt_aligned_free(void *ptr)
 #define OPT_ATOMIC_STORE_REL(ptr, val) \
     atomic_store_explicit((_Atomic uint32_t*)(ptr), (val), memory_order_release)
 
+/* Read-modify-write returning the value held before the operation */
+#define OPT_ATOMIC_FETCH_ADD(ptr, val) \
+    atomic_fetch_add_explicit((_Atomic uint32_t*)(ptr), (val), memory_order_acq_rel)
+
+#define OPT_ATOMIC_FETCH_SUB(ptr, val) \
+    atomic_fetch_sub_explicit((_Atomic uint32_t*)(ptr), (val), memory_order_acq_rel)
+
 #define OPT_MEMORY_FENCE() atomic_thread_fence(memory_order_seq_cst)
 
 #elif defined(COMPILER_MSVC)
@@ -586,6 +593,12 @@ static __forceinline void opt_atomic_store_rel(volatile uint32_t *ptr, uint32_t 
 #define OPT_ATOMIC_LOAD_ACQ(ptr) opt_atomic_load_acq((volatile uint32_t*)(ptr))
 #define OPT_ATOMIC_STORE_REL(ptr, val) opt_atomic_store_rel((volatile uint32_t*)(ptr), (val))
 
+/* Read-modify-write returning the value held before the operation */
+#define OPT_ATOMIC_FETCH_ADD(ptr, val) \
+    ((uint32_t)_InterlockedExchangeAdd((volatile long*)(ptr), (long)(val)))
+#define OPT_ATOMIC_FETCH_SUB(ptr, val) \
+    ((uint32_t)_InterlockedExchangeAdd((volatile long*)(ptr), -(long)(val)))
+
 #elif defined(COMPILER_GCC) || defined(COMPILER_CLANG)
 /* ---- GCC/Clang __atomic builtins ---- */
 
@@ -595,6 +608,13 @@ static __forceinline void opt_atomic_store_rel(volatile uint32_t *ptr, uint32_t 
 #define OPT_ATOMIC_STORE_REL(ptr, val) \
     __atomic_store_n((volatile uint32_t*)(ptr), (val), __ATOMIC_RELEASE)
 
+/* Read-modify-write returning the value held before the operation */
+#define OPT_ATOMIC_FETCH_ADD(ptr, val) \
+    __atomic_fetch_add((volatile uint32_t*)(ptr), (val), __ATOMIC_ACQ_REL)
+
+#define OPT_ATOMIC_FETCH_SUB(ptr, val) \
+    __atomic_fetch_sub((volatile uint32_t*)(ptr), (val), __ATOMIC_ACQ_REL)
+
 #define OPT_MEMORY_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
 
 #else
@@ -603,6 +623,11 @@ static __forceinline void opt_atomic_store_rel(volatile uint32_t *ptr, uint32_t 
 
 #define OPT_ATOMIC_LOAD_ACQ(ptr) (OPT_COMPILER_BARRIER(), *(volatile uint32_t*)(ptr))
 #define OPT_ATOMIC_STORE_REL(ptr, val) (*(volatile uint32_t*)(ptr) = (val), OPT_COMPILER_BARRIER())
+/* Read-modify-write returning the value held before the operation */
+#define OPT_ATOMIC_FETCH_ADD(ptr, val) \
+    (OPT_COMPILER_BARRIER(), (*(volatile uint32_t*)(ptr) += (val)) - (val))
+#define OPT_ATOMIC_FETCH_SUB(ptr, val) \
+    (OPT_COMPILER_BARRIER(), (*(volatile uint32_t*)(ptr) -= (val)) + (val))
 #define OPT_MEMORY_FENCE() OPT_COMPILER_BARRIER()
 
 #endif

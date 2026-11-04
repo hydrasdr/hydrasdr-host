@@ -14,6 +14,7 @@
 #define IQCONVERTER_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 /* Valid halfband filter tap counts */
 #define IQCONV_TAPS_FAST (33)       /* 33-tap fast filter */
@@ -164,6 +165,11 @@ extern IQCONV_API void IQCONV_CALL iqconverter_reset(iqconverter_t *cnv);
 extern IQCONV_API void IQCONV_CALL iqconverter_process(
 	iqconverter_t *cnv, const uint16_t *src, void *dest, int len);
 
+/* iqconverter_process() with the table of the input's ADC width (iqconv_lut_get) */
+extern IQCONV_API void IQCONV_CALL iqconverter_process_lut(
+	iqconverter_t *cnv, const iqconv_lut_t *table,
+	const uint16_t *src, void *dest, int len);
+
 /*
  * Process 8-bit raw ADC samples through DDC (for 8-bit ADC mode @ 40 MSPS)
  *
@@ -177,6 +183,11 @@ extern IQCONV_API void IQCONV_CALL iqconverter_process(
  */
 extern IQCONV_API void IQCONV_CALL iqconverter_process_u8(
 	iqconverter_t *cnv, const uint8_t *src, void *dest, int len);
+
+/* iqconverter_process_u8() with the 8-bit table (iqconv_lut_get) */
+extern IQCONV_API void IQCONV_CALL iqconverter_process_u8_lut(
+	iqconverter_t *cnv, const iqconv_lut_t *table,
+	const uint8_t *src, void *dest, int len);
 
 /*
  * Get algorithm description string
@@ -240,8 +251,8 @@ typedef struct {
 	void (*free)(void *ctx);
 	void (*reset)(void *ctx);
 	void (*process)(void *ctx, void *samples, int len);
-	void (*process_u16)(void *ctx, const void *src, void *dest, int len);
-	void (*process_u8)(void *ctx, const void *src, void *dest, int len);  /* 8-bit ADC input */
+	void (*process_u16)(void *ctx, const iqconv_lut_t *table, const void *src, void *dest, int len);
+	void (*process_u8)(void *ctx, const iqconv_lut_t *table, const void *src, void *dest, int len);  /* 8-bit ADC input */
 } iqconv_algorithm_t;
 
 /*

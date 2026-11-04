@@ -16,6 +16,7 @@
 #define IQCONVERTER_INT16_OPT_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -151,6 +152,7 @@ void iqconverter_int16_opt_reset(iqconverter_int16_opt_t *cnv);
  * - ~2.4x performance improvement over legacy
  */
 void iqconverter_int16_opt_process_u16(iqconverter_int16_opt_t *cnv,
+				       const iqconv_lut_t *table,
 				       const uint16_t *src,
 				       int16_t *dest, int len);
 
@@ -167,6 +169,7 @@ void iqconverter_int16_opt_process_u16(iqconverter_int16_opt_t *cnv,
  *   len  - Number of input samples (must be multiple of 4)
  */
 void iqconverter_int16_opt_process_u8(iqconverter_int16_opt_t *cnv,
+				      const iqconv_lut_t *table,
 				      const uint8_t *src,
 				      int16_t *dest, int len);
 

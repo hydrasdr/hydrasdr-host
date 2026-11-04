@@ -11,25 +11,11 @@
 
 #include "iqconverter_decimator.h"
 #include "compat_opt.h"
+#include "iqconverter_common.h"
 #include <stdlib.h>
 #include <string.h>
 
-/* ========================================================================
- * INT16 SATURATION MACRO
- *
- * Clamps int32 accumulator result to int16 range [-32768, +32767].
- * Required because the step response overshoots full scale (1.13x) on strong
- * signals when AGC is disabled.
- *
- * Uses branchless implementation for minimal performance impact:
- * - If value is in range: returns value as int16_t
- * - If overflow (>32767): returns 32767
- * - If underflow (<-32768): returns -32768
- * ======================================================================== */
-#define SAT_I16(x) ( \
-	((x) > 32767) ? (int16_t)32767 : \
-	(((x) < -32768) ? (int16_t)-32768 : (int16_t)(x)) \
-)
+/* SAT_I16: the step response overshoots full scale (1.13x) on strong signals */
 
 /* Half LSB of the 15-bit output shift: a plain >> 15 truncates and leaves -0.5 LSB of DC per stage */
 #define DEC_ROUND (1 << 14)

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <libusb.h>
 #include "hydrasdr_shared.h"
 #include "filters.h"
@@ -81,6 +82,20 @@ static int hydrasdr_cancel_transfers(hydrasdr_streaming_t* stream)
 	else {
 		return HYDRASDR_ERROR_OTHER;
 	}
+}
+
+/* Submit a transfer, counted in active_transfers until its callback runs */
+static int hydrasdr_submit_transfer(hydrasdr_streaming_t *stream,
+	struct libusb_transfer *transfer)
+{
+	int result;
+
+	/* Counted first: the callback can run before the submit returns */
+	OPT_ATOMIC_FETCH_ADD(&stream->usb_hot.active_transfers, 1);
+	result = libusb_submit_transfer(transfer);
+	if (result != LIBUSB_SUCCESS)
+		OPT_ATOMIC_FETCH_SUB(&stream->usb_hot.active_transfers, 1);
+	return result;
 }
 
 /*
@@ -342,9 +357,8 @@ cleanup:
 
 static void hydrasdr_convert_samples_int16(hydrasdr_streaming_t* stream, uint16_t *src, int16_t *dest, int count)
 {
-	(void)stream;
 	int i;
-	const int16_t *lut = iqconv_lut.lut_int16;
+	const int16_t *lut = stream->lut->lut_int16;
 	for (i = 0; i < count; i += 4)
 	{
 		dest[i + 0] = lut[src[i + 0]];
@@ -356,9 +370,8 @@ static void hydrasdr_convert_samples_int16(hydrasdr_streaming_t* stream, uint16_
 
 static void hydrasdr_convert_samples_float(hydrasdr_streaming_t* stream, uint16_t *src, float *dest, int count)
 {
-	(void)stream;
 	int i;
-	const float *lut = iqconv_lut.lut_float32;
+	const float *lut = stream->lut->lut_float32;
 	for (i = 0; i < count; i += 4)
 	{
 		dest[i + 0] = lut[src[i + 0]];
@@ -414,7 +427,7 @@ static void hydrasdr_convert_int16_to_uint8(const int16_t *src, uint8_t *dest, i
  * Convert raw ADC samples to int8 real samples via LUT
  *
  * Hardware-agnostic: Supports 8, 10, 12, 14, or 16-bit ADCs.
- * The LUT (initialized via iqconv_lut_init) normalizes any ADC value
+ * The stream table normalizes any ADC value
  * to int16 range, then >> 8 converts to int8.
  *
  * Input: Raw ADC samples as uint16_t (max 16-bit ADC supported)
@@ -422,9 +435,8 @@ static void hydrasdr_convert_int16_to_uint8(const int16_t *src, uint8_t *dest, i
  */
 static void hydrasdr_convert_samples_int8(hydrasdr_streaming_t* stream, uint16_t *src, int8_t *dest, int count)
 {
-	(void)stream;
 	int i;
-	const int16_t *lut = iqconv_lut.lut_int16;
+	const int16_t *lut = stream->lut->lut_int16;
 	for (i = 0; i < count; i += 4)
 	{
 		dest[i + 0] = (int8_t)(lut[src[i + 0]] >> 8);
@@ -438,7 +450,7 @@ static void hydrasdr_convert_samples_int8(hydrasdr_streaming_t* stream, uint16_t
  * Convert raw ADC samples to uint8 real samples via LUT
  *
  * Hardware-agnostic: Supports 8, 10, 12, 14, or 16-bit ADCs.
- * The LUT (initialized via iqconv_lut_init) normalizes any ADC value
+ * The stream table normalizes any ADC value
  * to int16 range, then >> 8 + 128 converts to uint8.
  *
  * Input: Raw ADC samples as uint16_t (max 16-bit ADC supported)
@@ -446,9 +458,8 @@ static void hydrasdr_convert_samples_int8(hydrasdr_streaming_t* stream, uint16_t
  */
 static void hydrasdr_convert_samples_uint8(hydrasdr_streaming_t* stream, uint16_t *src, uint8_t *dest, int count)
 {
-	(void)stream;
 	int i;
-	const int16_t *lut = iqconv_lut.lut_int16;
+	const int16_t *lut = stream->lut->lut_int16;
 	for (i = 0; i < count; i += 4)
 	{
 		dest[i + 0] = (uint8_t)((lut[src[i + 0]] >> 8) + 128);
@@ -593,6 +604,19 @@ void hydrasdr_unpack_samples_reference(const uint16_t* input,
 static void LIBUSB_CALL hydrasdr_libusb_transfer_callback(struct libusb_transfer* usb_transfer)
 {
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)usb_transfer->user_data;
+	uint32_t active_before;
+
+	/* Transfer back from libusb */
+	active_before = OPT_ATOMIC_FETCH_SUB(&stream->usb_hot.active_transfers, 1);
+	if (active_before == 0) {
+		/* Unaccounted callback: stop, do not resubmit */
+#if HYDRASDR_USB_DEBUG
+		fprintf(stderr, "[USB_DEBUG] active_transfers underflow (after %llu buffers)\n",
+			(unsigned long long)stream->stats.total_buffers_received);
+#endif
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
+		return;
+	}
 
 	if (!OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming) ||
 	    OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.stop_requested))
@@ -632,7 +656,7 @@ static void LIBUSB_CALL hydrasdr_libusb_transfer_callback(struct libusb_transfer
 			stream->stats.total_dropped_buffers++;
 		}
 
-		int submit_result = libusb_submit_transfer(usb_transfer);
+		int submit_result = hydrasdr_submit_transfer(stream, usb_transfer);
 		if (submit_result != 0)
 		{
 #if HYDRASDR_USB_DEBUG
@@ -668,6 +692,9 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 	hydrasdr_transfer_t transfer;
 	void *current_output;
 
+	stream->consumer_self = pthread_self();
+	OPT_ATOMIC_STORE_REL(&stream->consumer_self_set, 1);
+
 	/* Set high thread priority for low-latency streaming */
 #ifdef _WIN32
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
@@ -689,6 +716,10 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 	{
 		void *buffer_ptr = NULL;
 
+		/* A hold (sample rate change) waits between two buffers */
+		while (OPT_ATOMIC_LOAD_ACQ(&stream->hold_requested))
+			pthread_cond_wait(&stream->consumer_cond, &stream->consumer_mutex);
+
 		/* Try to dequeue without blocking first */
 		while (!spsc_queue_dequeue(&stream->spsc, &buffer_ptr, &dropped_buffers))
 		{
@@ -702,6 +733,9 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 			/* Wait for signal from USB callback - releases mutex while waiting */
 			pthread_cond_wait(&stream->consumer_cond, &stream->consumer_mutex);
 		}
+
+		/* Busy until the callback returns (set under the mutex) */
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.consumer_busy, 1);
 
 		/* Release mutex during processing to allow USB callback to signal */
 		pthread_mutex_unlock(&stream->consumer_mutex);
@@ -739,10 +773,10 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 		case HYDRASDR_SAMPLE_FLOAT32_IQ:
 			/* Unified ADC->IQ processing (handles both fused and legacy) */
 			if (stream->adc_bits == IQCONV_ADC_8BIT) {
-				iqconverter_process_u8(stream->cnv_f, (const uint8_t *)buffer_ptr,
+				iqconverter_process_u8_lut(stream->cnv_f, stream->lut, (const uint8_t *)buffer_ptr,
 					(float *)current_output, sample_count);
 			} else {
-				iqconverter_process(stream->cnv_f, input_samples,
+				iqconverter_process_lut(stream->cnv_f, stream->lut, input_samples,
 					(float *)current_output, sample_count);
 			}
 			/*
@@ -761,10 +795,10 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 		case HYDRASDR_SAMPLE_INT16_IQ:
 			/* Unified ADC->IQ processing (handles both fused and legacy) */
 			if (stream->adc_bits == IQCONV_ADC_8BIT) {
-				iqconverter_process_u8(stream->cnv_i, (const uint8_t *)buffer_ptr,
+				iqconverter_process_u8_lut(stream->cnv_i, stream->lut, (const uint8_t *)buffer_ptr,
 					(int16_t *)current_output, sample_count);
 			} else {
-				iqconverter_process(stream->cnv_i, input_samples,
+				iqconverter_process_lut(stream->cnv_i, stream->lut, input_samples,
 					(int16_t *)current_output, sample_count);
 			}
 			/*
@@ -797,10 +831,10 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 				int iq_pairs;
 
 				if (stream->adc_bits == IQCONV_ADC_8BIT) {
-					iqconverter_process_u8(stream->cnv_i, (const uint8_t *)buffer_ptr,
+					iqconverter_process_u8_lut(stream->cnv_i, stream->lut, (const uint8_t *)buffer_ptr,
 						temp_buf, sample_count);
 				} else {
-					iqconverter_process(stream->cnv_i, input_samples,
+					iqconverter_process_lut(stream->cnv_i, stream->lut, input_samples,
 						temp_buf, sample_count);
 				}
 				iq_pairs = sample_count / (2 * stream->decimation_factor);
@@ -824,10 +858,10 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 				int iq_pairs;
 
 				if (stream->adc_bits == IQCONV_ADC_8BIT) {
-					iqconverter_process_u8(stream->cnv_i, (const uint8_t *)buffer_ptr,
+					iqconverter_process_u8_lut(stream->cnv_i, stream->lut, (const uint8_t *)buffer_ptr,
 						temp_buf, sample_count);
 				} else {
-					iqconverter_process(stream->cnv_i, input_samples,
+					iqconverter_process_lut(stream->cnv_i, stream->lut, input_samples,
 						temp_buf, sample_count);
 				}
 				iq_pairs = sample_count / (2 * stream->decimation_factor);
@@ -873,6 +907,8 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 			OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
 		}
 
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.consumer_busy, 0);
+
 		/* Re-acquire mutex before checking queue again */
 		pthread_mutex_lock(&stream->consumer_mutex);
 	}
@@ -881,6 +917,7 @@ static void* hydrasdr_consumer_threadproc(void *arg)
 
 exit_loop:
 	OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
+	OPT_ATOMIC_STORE_REL(&stream->consumer_self_set, 0);
 
 	return NULL;
 }
@@ -922,6 +959,51 @@ static void* hydrasdr_transfer_threadproc(void* arg)
 	return NULL;
 }
 
+#ifdef _WIN32
+/*
+ * WinUSB RAW_IO on bulk IN (libusb 1.0.30 or later), set before each submit
+ * Needs whole packets up to the pipe limit. Looked up at run time so an
+ * older libusb DLL still loads (queued I/O).
+ */
+typedef int (LIBUSB_CALL *raw_io_query_fn)(libusb_device_handle *, uint8_t);
+typedef int (LIBUSB_CALL *raw_io_set_fn)(libusb_device_handle *, uint8_t, int);
+
+static void hydrasdr_set_raw_io(hydrasdr_streaming_t *stream, uint8_t endpoint)
+{
+	libusb_device_handle *handle = stream->dev->usb_handle;
+	HMODULE lib = GetModuleHandleA(LIBUSB_DLL_NAME);
+	raw_io_query_fn supports, max_size;
+	raw_io_set_fn set;
+	int limit, mps, enable, result;
+
+	if (lib == NULL)
+		return;
+	supports = (raw_io_query_fn)(void (*)(void))GetProcAddress(lib,
+		"libusb_endpoint_supports_raw_io");
+	max_size = (raw_io_query_fn)(void (*)(void))GetProcAddress(lib,
+		"libusb_get_max_raw_io_transfer_size");
+	set = (raw_io_set_fn)(void (*)(void))GetProcAddress(lib,
+		"libusb_endpoint_set_raw_io");
+	if (supports == NULL || max_size == NULL || set == NULL)
+		return;
+	if (supports(handle, endpoint) != 1)
+		return;
+
+	limit = max_size(handle, endpoint);
+	mps = libusb_get_max_packet_size(libusb_get_device(handle), endpoint);
+	enable = limit > 0 && mps > 0 &&
+		stream->buffer_size <= (uint32_t)limit &&
+		stream->buffer_size % (uint32_t)mps == 0;
+	result = set(handle, endpoint, enable);
+#if HYDRASDR_USB_DEBUG
+	fprintf(stderr, "[USB_DEBUG] RAW_IO %s on endpoint 0x%02x: %d (transfer %u, limit %d, packet %d)\n",
+		enable ? "on" : "off", endpoint, result, stream->buffer_size, limit, mps);
+#else
+	(void)result;
+#endif
+}
+#endif
+
 /* Prepare and submit transfers */
 
 static int hydrasdr_prepare_transfers(hydrasdr_streaming_t* stream, uint8_t endpoint_address)
@@ -930,12 +1012,16 @@ static int hydrasdr_prepare_transfers(hydrasdr_streaming_t* stream, uint8_t endp
 	uint32_t transfer_index;
 	if (stream->transfers != NULL)
 	{
+#ifdef _WIN32
+		hydrasdr_set_raw_io(stream, endpoint_address);
+#endif
 		for (transfer_index = 0; transfer_index<stream->transfer_count; transfer_index++)
 		{
 			stream->transfers[transfer_index]->endpoint = endpoint_address;
 			stream->transfers[transfer_index]->callback = hydrasdr_libusb_transfer_callback;
 
-			error = libusb_submit_transfer(stream->transfers[transfer_index]);
+			error = hydrasdr_submit_transfer(stream,
+				stream->transfers[transfer_index]);
 			if (error != 0)
 			{
 				return HYDRASDR_ERROR_LIBUSB;
@@ -953,10 +1039,12 @@ static int hydrasdr_prepare_transfers(hydrasdr_streaming_t* stream, uint8_t endp
 static int hydrasdr_kill_io_threads(hydrasdr_streaming_t* stream)
 {
 	struct timeval timeout = { 0, EVENT_DRAIN_TIMEOUT_US };
+	int drain_result = HYDRASDR_SUCCESS;
 	int i;
 
-	/* Idempotent: safe to call multiple times */
-	if (!stream->transfer_thread_running && !stream->consumer_thread_running)
+	/* Idempotent: nothing running, nothing in flight */
+	if (!stream->transfer_thread_running && !stream->consumer_thread_running &&
+	    OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.active_transfers) == 0)
 	{
 		OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 0);
 		OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
@@ -965,11 +1053,7 @@ static int hydrasdr_kill_io_threads(hydrasdr_streaming_t* stream)
 
 	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.stop_requested))
 	{
-		OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 0);
 		OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
-
-		/* Cancel pending USB transfers */
-		hydrasdr_cancel_transfers(stream);
 
 		/* Wake up consumer thread so it can exit */
 		pthread_mutex_lock(&stream->consumer_mutex);
@@ -986,15 +1070,29 @@ static int hydrasdr_kill_io_threads(hydrasdr_streaming_t* stream)
 			stream->consumer_thread_running = false;
 		}
 
-		/* Drain remaining USB events to ensure all cancellation callbacks have fired.
+		/* Cancel after the event thread stops, so no callback resubmits */
+		hydrasdr_cancel_transfers(stream);
+
+		/* Drain remaining USB events until all cancellation callbacks have fired.
 		 * This is critical - libusb_close() will hang if transfers are still pending. */
-		for (i = 0; i < EVENT_DRAIN_ITERATIONS; i++)
+		for (i = 0; i < EVENT_DRAIN_ITERATIONS &&
+		     OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.active_transfers) != 0;
+		     i++)
 		{
-			libusb_handle_events_timeout_completed(stream->dev->usb_context, &timeout, NULL);
+			int result = libusb_handle_events_timeout_completed(
+				stream->dev->usb_context, &timeout, NULL);
+
+			if (result < 0 && result != LIBUSB_ERROR_INTERRUPTED) {
+				drain_result = HYDRASDR_ERROR_LIBUSB;
+				break;
+			}
 		}
+		if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.active_transfers) != 0)
+			drain_result = HYDRASDR_ERROR_LIBUSB;
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 0);
 	}
 
-	return HYDRASDR_SUCCESS;
+	return drain_result;
 }
 
 static int hydrasdr_create_io_threads(hydrasdr_streaming_t* stream, hydrasdr_sample_block_cb_fn callback)
@@ -1088,11 +1186,18 @@ static int hydrasdr_start_streaming(struct hydrasdr_device* dev,
 	result = hydrasdr_prepare_transfers(stream, endpoint_address);
 	if (result != HYDRASDR_SUCCESS)
 	{
-		OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
+		/* Reap any transfer that was submitted before the failure */
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 1);
+		hydrasdr_kill_io_threads(stream);
 		return result;
 	}
 
 	result = hydrasdr_create_io_threads(stream, callback);
+	if (result != HYDRASDR_SUCCESS) {
+		/* Transfers are already in flight - reap them before returning */
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 1);
+		hydrasdr_kill_io_threads(stream);
+	}
 
 	return result;
 }
@@ -1102,6 +1207,19 @@ static int hydrasdr_stop_streaming(struct hydrasdr_device* dev)
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
 	if (!stream) return HYDRASDR_SUCCESS;
 
+	OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 1);
+	return hydrasdr_kill_io_threads(stream);
+}
+
+static bool hydrasdr_on_consumer_thread(hydrasdr_streaming_t* stream);
+
+/* Stop a stream that ended on its own: join its threads, wait for its transfers.
+ * Not from the sample callback (the join would wait for it). */
+static int hydrasdr_reap_stream(hydrasdr_streaming_t* stream)
+{
+	if (hydrasdr_on_consumer_thread(stream)) {
+		return HYDRASDR_ERROR_BUSY;
+	}
 	OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 1);
 	return hydrasdr_kill_io_threads(stream);
 }
@@ -1137,6 +1255,7 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 	stream->data_format = HYDRASDR_DATA_RAW_ADC;	/* Default: raw ADC (updated by firmware) */
 	OPT_ATOMIC_STORE_REL(&stream->usb_hot.streaming, 0);
 	OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 0);
+	OPT_ATOMIC_STORE_REL(&stream->usb_hot.active_transfers, 0);
 	stream->sample_type = default_sample_type;
 	dev->sample_type = default_sample_type;
 
@@ -1305,15 +1424,13 @@ int hydrasdr_generic_init_streaming(struct hydrasdr_device* dev,
 		return result;
 	}
 
-	/* Initialize LUT for ultra-fast ADC conversion */
-	if (!iqconv_lut_is_initialized() ||
-		iqconv_lut_get_adc_bits() != stream->adc_bits) {
-		iqconv_lut_init(stream->adc_bits);
-	}
+	/* Conversion table of this stream's ADC width */
+	stream->lut = iqconv_lut_get(stream->adc_bits);
 
 	/* Initialize DDC instances with default filters */
 	stream->cnv_f = iqconverter_create(HB_KERNEL_FLOAT, HB_KERNEL_FLOAT_LEN, "float32_opt");
-	if (stream->cnv_f == NULL) {
+	if (stream->lut == NULL || stream->cnv_f == NULL) {
+		iqconverter_free(stream->cnv_f);
 		hydrasdr_free_transfers(stream);
 		free(stream->supported_bandwidths);
 		free(stream->supported_samplerates);
@@ -1357,9 +1474,12 @@ int hydrasdr_generic_cleanup_streaming(struct hydrasdr_device* dev)
 {
 	if (dev && dev->private_data) {
 		hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
+		int result;
 
-		/* Stop any active streaming */
-		hydrasdr_stop_streaming(dev);
+		/* Stop any active streaming (no free while libusb owns transfers) */
+		result = hydrasdr_stop_streaming(dev);
+		if (result != HYDRASDR_SUCCESS)
+			return result;
 
 		/* Destroy consumer thread synchronization */
 		pthread_cond_destroy(&stream->consumer_cond);
@@ -1708,7 +1828,9 @@ int hydrasdr_generic_get_decimation_mode(struct hydrasdr_device* dev, uint32_t* 
  */
 static int send_hw_samplerate(struct hydrasdr_device* dev,
 			      hydrasdr_streaming_t* stream,
-			      uint32_t hw_rate)
+			      uint32_t hw_rate,
+			      uint8_t *adc_bits,
+			      uint8_t *data_format)
 {
 	int result;
 	uint8_t response[4] = {0, IQCONV_ADC_12BIT, HYDRASDR_DATA_RAW_ADC, 0};
@@ -1732,8 +1854,6 @@ static int send_hw_samplerate(struct hydrasdr_device* dev,
 		}
 		rate_param /= 1000;
 	}
-
-	libusb_clear_halt(dev->usb_handle, LIBUSB_ENDPOINT_IN | 1);
 
 	/*
 	 * Request size depends on capability:
@@ -1763,28 +1883,69 @@ static int send_hw_samplerate(struct hydrasdr_device* dev,
 	 */
 	if (stream->has_extended_samplerate_info && rate_idx < stream->supported_samplerate_count) {
 		/* Use cached extended info - most reliable */
-		stream->adc_bits = stream->samplerate_info[rate_idx].adc_bits;
-		stream->data_format = stream->samplerate_info[rate_idx].data_format;
+		*adc_bits = stream->samplerate_info[rate_idx].adc_bits;
+		*data_format = stream->samplerate_info[rate_idx].data_format;
 	} else {
 		/* Old firmware: assume 12-bit RAW_ADC (backward compatible) */
-		stream->adc_bits = IQCONV_ADC_12BIT;
-		stream->data_format = HYDRASDR_DATA_RAW_ADC;
-	}
-
-	/* Reinitialize LUT for actual ADC bits (only for RAW_ADC mode) */
-	if (stream->data_format == HYDRASDR_DATA_RAW_ADC) {
-		if (iqconv_lut_get_adc_bits() != stream->adc_bits) {
-			iqconv_lut_init(stream->adc_bits);
-		}
+		*adc_bits = IQCONV_ADC_12BIT;
+		*data_format = HYDRASDR_DATA_RAW_ADC;
 	}
 
 	return HYDRASDR_SUCCESS;
 }
 
+static void hydrasdr_sleep_ms(unsigned ms)
+{
+#ifdef _WIN32
+	Sleep(ms);
+#else
+	struct timespec ts;
+
+	ts.tv_sec = (time_t)(ms / 1000U);
+	ts.tv_nsec = (long)((ms % 1000U) * 1000000L);
+	nanosleep(&ts, NULL);
+#endif
+}
+
+/* True on the consumer thread (where the sample callback runs) */
+static bool hydrasdr_on_consumer_thread(hydrasdr_streaming_t* stream)
+{
+	return OPT_ATOMIC_LOAD_ACQ(&stream->consumer_self_set) &&
+	       pthread_equal(pthread_self(), stream->consumer_self);
+}
+
+/* Hold the consumer between two buffers (no-op on the consumer thread) */
+static void hydrasdr_consumer_hold(hydrasdr_streaming_t* stream)
+{
+	if (hydrasdr_on_consumer_thread(stream)) {
+		return;
+	}
+	/* Parks the consumer after its current buffer */
+	OPT_ATOMIC_STORE_REL(&stream->hold_requested, 1);
+	pthread_mutex_lock(&stream->consumer_mutex);
+	while (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.consumer_busy)) {
+		pthread_mutex_unlock(&stream->consumer_mutex);
+		hydrasdr_sleep_ms(CONSUMER_HOLD_POLL_MS);
+		pthread_mutex_lock(&stream->consumer_mutex);
+	}
+}
+
+static void hydrasdr_consumer_release(hydrasdr_streaming_t* stream)
+{
+	if (hydrasdr_on_consumer_thread(stream)) {
+		return;
+	}
+	OPT_ATOMIC_STORE_REL(&stream->hold_requested, 0);
+	pthread_cond_signal(&stream->consumer_cond);
+	pthread_mutex_unlock(&stream->consumer_mutex);
+}
+
 /*
- * Recreate DDC instances with new decimation factor
+ * Create DDC instances for a new decimation factor
+ * The caller swaps them in with the consumer held
  */
-static int update_ddc_decimation(hydrasdr_streaming_t* stream, uint32_t decimation)
+static int create_ddc_decimation(uint32_t decimation,
+				 iqconverter_t **cnv_f, iqconverter_t **cnv_i)
 {
 	iqconverter_t *new_cnv_f = NULL;
 	iqconverter_t *new_cnv_i = NULL;
@@ -1814,11 +1975,8 @@ static int update_ddc_decimation(hydrasdr_streaming_t* stream, uint32_t decimati
 		return HYDRASDR_ERROR_NO_MEM;
 	}
 
-	/* Replace old converters */
-	iqconverter_free(stream->cnv_f);
-	iqconverter_free(stream->cnv_i);
-	stream->cnv_f = new_cnv_f;
-	stream->cnv_i = new_cnv_i;
+	*cnv_f = new_cnv_f;
+	*cnv_i = new_cnv_i;
 
 	return HYDRASDR_SUCCESS;
 }
@@ -1832,6 +1990,10 @@ int hydrasdr_generic_set_samplerate(struct hydrasdr_device* dev, uint32_t sample
 	int result;
 	uint32_t *rates;
 	uint32_t rate_count;
+	iqconverter_t *new_cnv_f = NULL, *new_cnv_i = NULL;
+	iqconverter_t *old_cnv_f = NULL, *old_cnv_i = NULL;
+	const iqconv_lut_t *lut = NULL;
+	uint8_t adc_bits, data_format;
 
 	/* Reject extreme invalid values */
 	if (samplerate > MAX_SAMPLERATE_HZ) {
@@ -1923,28 +2085,49 @@ int hydrasdr_generic_set_samplerate(struct hydrasdr_device* dev, uint32_t sample
 		}
 	}
 
-	/* Update decimation if needed */
+	/* Build the converters of a new decimation factor first */
 	if (decimation != stream->decimation_factor) {
-		result = update_ddc_decimation(stream, decimation);
+		result = create_ddc_decimation(decimation, &new_cnv_f, &new_cnv_i);
 		if (result != HYDRASDR_SUCCESS) {
 			return result;
 		}
 	}
 
 	/* Send hardware rate to device */
-	result = send_hw_samplerate(dev, stream, hw_rate);
+	result = send_hw_samplerate(dev, stream, hw_rate, &adc_bits, &data_format);
+	if (result == HYDRASDR_SUCCESS) {
+		lut = iqconv_lut_get(adc_bits);
+		if (lut == NULL) {
+			result = HYDRASDR_ERROR_NO_MEM;
+		}
+	}
 	if (result != HYDRASDR_SUCCESS) {
+		iqconverter_free(new_cnv_f);
+		iqconverter_free(new_cnv_i);
 		return result;
 	}
 
-	/* Update state */
+	/* Commit with the consumer held: it reads all of this per buffer */
+	hydrasdr_consumer_hold(stream);
+	if (new_cnv_f != NULL) {
+		old_cnv_f = stream->cnv_f;
+		old_cnv_i = stream->cnv_i;
+		stream->cnv_f = new_cnv_f;
+		stream->cnv_i = new_cnv_i;
+	}
+	stream->adc_bits = adc_bits;
+	stream->lut = lut;
+	stream->data_format = data_format;
 	stream->hardware_samplerate = hw_rate;
 	stream->effective_samplerate = samplerate;
 	stream->decimation_factor = decimation;
+	hydrasdr_consumer_release(stream);
+	iqconverter_free(old_cnv_f);
+	iqconverter_free(old_cnv_i);
 
 	/*
-	 * Note: ADC bit depth and data format are now automatically set by
-	 * send_hw_samplerate() based on firmware response. This is fully
+	 * Note: ADC bit depth and data format come from send_hw_samplerate()
+	 * based on firmware response and are committed above. This is fully
 	 * transparent to the API user and supports future ADC variants.
 	 */
 
@@ -2079,7 +2262,6 @@ int hydrasdr_generic_set_bandwidth(struct hydrasdr_device* dev, uint32_t bandwid
 
 			/* Apply auto-bandwidth immediately if streaming */
 			if (best_bw > 0) {
-				libusb_clear_halt(dev->usb_handle, LIBUSB_ENDPOINT_IN | 1);
 				libusb_control_transfer(
 					dev->usb_handle,
 					((uint8_t)LIBUSB_ENDPOINT_IN | (uint8_t)LIBUSB_REQUEST_TYPE_VENDOR | (uint8_t)LIBUSB_RECIPIENT_DEVICE),
@@ -2131,7 +2313,6 @@ int hydrasdr_generic_set_bandwidth(struct hydrasdr_device* dev, uint32_t bandwid
 		}
 	}
 
-	libusb_clear_halt(dev->usb_handle, LIBUSB_ENDPOINT_IN | 1);
 	length = 1;
 	result = libusb_control_transfer(
 		dev->usb_handle,
@@ -2195,6 +2376,11 @@ int hydrasdr_generic_set_packing(struct hydrasdr_device* dev, uint8_t value)
 	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming)) {
 		return HYDRASDR_ERROR_BUSY;
 	}
+	/* Before the device changes mode */
+	result = hydrasdr_reap_stream(stream);
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
+	}
 
 	result = libusb_control_transfer(
 		dev->usb_handle,
@@ -2206,7 +2392,6 @@ int hydrasdr_generic_set_packing(struct hydrasdr_device* dev, uint8_t value)
 
 	packing_enabled = (value == 1);
 	if (packing_enabled != stream->packing_enabled) {
-		hydrasdr_cancel_transfers(stream);
 		hydrasdr_free_transfers(stream);
 		stream->packing_enabled = packing_enabled;
 		stream->buffer_size = packing_enabled ? PACKED_BUFFER_SIZE : DEFAULT_BUFFER_SIZE;
@@ -2255,10 +2440,20 @@ int hydrasdr_generic_reset(struct hydrasdr_device* dev)
 int hydrasdr_generic_set_sample_type(struct hydrasdr_device* dev, enum hydrasdr_sample_type sample_type)
 {
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
+	int result;
 
 	/* Validate sample_type is within valid range */
 	if ((int)sample_type < 0 || sample_type >= HYDRASDR_SAMPLE_END) {
 		return HYDRASDR_ERROR_INVALID_PARAM;
+	}
+
+	/* Not while streaming: the consumer reads it per transfer */
+	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming)) {
+		return HYDRASDR_ERROR_BUSY;
+	}
+	result = hydrasdr_reap_stream(stream);
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
 	}
 
 	stream->sample_type = sample_type;
@@ -2773,6 +2968,7 @@ int hydrasdr_generic_set_conversion_filter_float32(struct hydrasdr_device* dev, 
 {
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
 	const char *algo;
+	int result;
 
 	/* Validate parameters - iqconverter_create() requires valid kernel and specific lengths */
 	if (!kernel) {
@@ -2785,6 +2981,11 @@ int hydrasdr_generic_set_conversion_filter_float32(struct hydrasdr_device* dev, 
 
 	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming)) {
 		return HYDRASDR_ERROR_BUSY;
+	}
+	/* An ended stream's consumer may still use the converter */
+	result = hydrasdr_reap_stream(stream);
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
 	}
 
 	/* Preserve decimation: use decimation algorithm if decimation > 1 */
@@ -2803,6 +3004,7 @@ int hydrasdr_generic_set_conversion_filter_int16(struct hydrasdr_device* dev, co
 {
 	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
 	const char *algo;
+	int result;
 
 	/* Validate parameters - iqconverter_create() requires valid kernel and specific lengths */
 	if (!kernel) {
@@ -2815,6 +3017,11 @@ int hydrasdr_generic_set_conversion_filter_int16(struct hydrasdr_device* dev, co
 
 	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming)) {
 		return HYDRASDR_ERROR_BUSY;
+	}
+	/* An ended stream's consumer may still use the converter */
+	result = hydrasdr_reap_stream(stream);
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
 	}
 
 	/* Preserve decimation: use decimation algorithm if decimation > 1 */
@@ -2917,6 +3124,7 @@ int hydrasdr_generic_set_conversion_algorithm(struct hydrasdr_device* dev, const
 	const conversion_algorithm_config_t *config;
 	iqconverter_t *new_cnv_f, *new_cnv_i;
 	const char *algo_f, *algo_i;
+	int result;
 
 	if (!dev || !dev->private_data) {
 		return HYDRASDR_ERROR_INVALID_PARAM;
@@ -2926,6 +3134,11 @@ int hydrasdr_generic_set_conversion_algorithm(struct hydrasdr_device* dev, const
 
 	if (OPT_ATOMIC_LOAD_ACQ(&stream->usb_hot.streaming)) {
 		return HYDRASDR_ERROR_BUSY;
+	}
+	/* An ended stream's consumer may still use the converters */
+	result = hydrasdr_reap_stream(stream);
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
 	}
 
 	/* NULL or empty string means default */
@@ -3034,11 +3247,19 @@ int hydrasdr_generic_device_init(struct hydrasdr_device* dev,
 
 int hydrasdr_generic_device_exit(struct hydrasdr_device* dev)
 {
-	/* Turn off receiver mode first (controls LED and hardware state) */
+	int result;
+
+	/* Stop streaming first */
+	result = hydrasdr_stop_streaming(dev);
+
+	/* Turn off receiver mode (controls LED and hardware state) */
 	hydrasdr_generic_set_receiver_mode(dev, HYDRASDR_RECEIVER_MODE_OFF);
 	/* Turn off Bias-T for safety (prevent power on antenna port) */
 	hydrasdr_generic_set_rf_bias(dev, 0);
-	hydrasdr_stop_streaming(dev);
+
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
+	}
 	return hydrasdr_generic_cleanup_streaming(dev);
 }
 
@@ -3047,7 +3268,17 @@ int hydrasdr_generic_start_rx(struct hydrasdr_device* dev,
 	void* rx_ctx,
 	uint8_t endpoint)
 {
+	hydrasdr_streaming_t* start_stream = (hydrasdr_streaming_t*)dev->private_data;
 	int result;
+
+	/* Refuse a second start; stop a stream that ended on its own */
+	if (OPT_ATOMIC_LOAD_ACQ(&start_stream->usb_hot.streaming)) {
+		return HYDRASDR_ERROR_BUSY;
+	}
+	result = hydrasdr_reap_stream(start_stream);
+	if (result != HYDRASDR_SUCCESS) {
+		return result;
+	}
 
 	result = hydrasdr_generic_set_receiver_mode(dev, HYDRASDR_RECEIVER_MODE_OFF);
 	if (result != HYDRASDR_SUCCESS) {
@@ -3070,7 +3301,6 @@ int hydrasdr_generic_start_rx(struct hydrasdr_device* dev,
 			uint8_t retval;
 			uint32_t bw_idx = stream->pending_auto_bandwidth_idx - 1;
 
-			libusb_clear_halt(dev->usb_handle, LIBUSB_ENDPOINT_IN | 1);
 			libusb_control_transfer(
 				dev->usb_handle,
 				((uint8_t)LIBUSB_ENDPOINT_IN | (uint8_t)LIBUSB_REQUEST_TYPE_VENDOR | (uint8_t)LIBUSB_RECIPIENT_DEVICE),
@@ -3103,8 +3333,12 @@ int hydrasdr_generic_start_rx(struct hydrasdr_device* dev,
 
 int hydrasdr_generic_stop_rx(struct hydrasdr_device* dev)
 {
+	hydrasdr_streaming_t* stream = (hydrasdr_streaming_t*)dev->private_data;
 	int result1, result2;
 
+	/* Mark the stop first: receiver off halts bulk IN, which is not an error */
+	if (stream)
+		OPT_ATOMIC_STORE_REL(&stream->usb_hot.stop_requested, 1);
 	result1 = hydrasdr_generic_set_receiver_mode(dev, HYDRASDR_RECEIVER_MODE_OFF);
 	result2 = hydrasdr_stop_streaming(dev);
 
@@ -3266,10 +3500,12 @@ int hydrasdr_generic_spiflash_write(struct hydrasdr_device* dev, const uint32_t 
 	{
 		return HYDRASDR_ERROR_INVALID_PARAM;
 	}
+	/* Timeout, not 0 (libusb waits forever) */
 	result = libusb_control_transfer(
 		dev->usb_handle,
 		((uint8_t)LIBUSB_ENDPOINT_OUT | (uint8_t)LIBUSB_REQUEST_TYPE_VENDOR | (uint8_t)LIBUSB_RECIPIENT_DEVICE),
-		HYDRASDR_SPIFLASH_WRITE, addr >> 16, addr & 0xFFFF, data, len, 0);
+		HYDRASDR_SPIFLASH_WRITE, addr >> 16, addr & 0xFFFF, data, len,
+		LIBUSB_CTRL_TIMEOUT_MS);
 	if (result < len)
 	{
 		return HYDRASDR_ERROR_LIBUSB;
@@ -3280,10 +3516,12 @@ int hydrasdr_generic_spiflash_write(struct hydrasdr_device* dev, const uint32_t 
 int hydrasdr_generic_spiflash_read(struct hydrasdr_device* dev, const uint32_t addr, const uint16_t len, unsigned char* data)
 {
 	int result;
+	/* Timeout, not 0 (libusb waits forever) */
 	result = libusb_control_transfer(
 		dev->usb_handle,
 		((uint8_t)LIBUSB_ENDPOINT_IN | (uint8_t)LIBUSB_REQUEST_TYPE_VENDOR | (uint8_t)LIBUSB_RECIPIENT_DEVICE),
-		HYDRASDR_SPIFLASH_READ, addr >> 16, addr & 0xFFFF, data, len, 0);
+		HYDRASDR_SPIFLASH_READ, addr >> 16, addr & 0xFFFF, data, len,
+		LIBUSB_CTRL_TIMEOUT_MS);
 	if (result < len)
 	{
 		return HYDRASDR_ERROR_LIBUSB;

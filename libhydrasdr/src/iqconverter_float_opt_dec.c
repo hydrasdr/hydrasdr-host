@@ -118,6 +118,7 @@ void iqconverter_float_opt_dec_reset(iqconverter_float_opt_dec_t *cnv)
  */
 OPT_HOT
 static void process_chunk_float(iqconverter_float_opt_dec_t *cnv,
+				const iqconv_lut_t *table,
 				const uint16_t *src, float *dest,
 				int chunk_len, int *out_offset)
 {
@@ -128,7 +129,7 @@ static void process_chunk_float(iqconverter_float_opt_dec_t *cnv,
 	float * OPT_RESTRICT inter = cnv->inter_buf;
 
 	/* Stage 0: Base DDC to intermediate buffer */
-	iqconverter_float_opt_process_u16(cnv->base_ctx, src, inter, chunk_len);
+	iqconverter_float_opt_process_u16(cnv->base_ctx, table, src, inter, chunk_len);
 	/*
 	 * Base DDC outputs chunk_len floats = chunk_len/2 I/Q pairs.
 	 * Decimation stages work on I/Q pair counts.
@@ -161,6 +162,7 @@ static void process_chunk_float(iqconverter_float_opt_dec_t *cnv,
 
 OPT_HOT
 void iqconverter_float_opt_dec_process_u16(iqconverter_float_opt_dec_t *cnv,
+					   const iqconv_lut_t *table,
 					   const uint16_t *src,
 					   float *dest, int len)
 {
@@ -176,7 +178,7 @@ void iqconverter_float_opt_dec_process_u16(iqconverter_float_opt_dec_t *cnv,
 
 	/* No decimation: direct pass-through */
 	if (cnv->num_dec_stages == 0) {
-		iqconverter_float_opt_process_u16(cnv->base_ctx, src, dest, len);
+		iqconverter_float_opt_process_u16(cnv->base_ctx, table, src, dest, len);
 		return;
 	}
 
@@ -209,7 +211,7 @@ void iqconverter_float_opt_dec_process_u16(iqconverter_float_opt_dec_t *cnv,
 		if (chunk_len == 0)
 			break;
 
-		process_chunk_float(cnv, src + offset, dest,
+		process_chunk_float(cnv, table, src + offset, dest,
 				    chunk_len, &out_offset);
 	}
 }

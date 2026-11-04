@@ -20,6 +20,7 @@
 #define IQCONVERTER_INT16_OPT65_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,6 +123,7 @@ void iqconverter_int16_opt65_reset(iqconverter_int16_opt65_t *cnv);
  *   dly_idx = (dly_idx + 1) & 15;  // No branch!
  */
 void iqconverter_int16_opt65_process_u16(iqconverter_int16_opt65_t *cnv,
+					 const iqconv_lut_t *table,
 					 const uint16_t *src,
 					 int16_t *dest, int len);
 

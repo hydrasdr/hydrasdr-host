@@ -1008,6 +1008,10 @@ int main(int argc, char** argv)
 
 	bytes_to_xfer = samples_to_xfer * wav_nb_bits_per_sample * wav_nb_channels / 8;
 
+	/* Unpacked RAW: 2 bytes per sample */
+	if (sample_type_val == HYDRASDR_SAMPLE_RAW && packing_val == 0)
+		bytes_to_xfer = samples_to_xfer * bytes_per_sample(HYDRASDR_SAMPLE_RAW);
+
 	if (samples_to_xfer >= SAMPLES_TO_XFER_MAX_U64) {
 		fprintf(stderr, "argument error: num_samples must be less than %s/%sMio\n",
 				u64toa(SAMPLES_TO_XFER_MAX_U64, &ascii_u64_data1),

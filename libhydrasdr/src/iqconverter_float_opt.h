@@ -16,6 +16,7 @@
 #define IQCONVERTER_FLOAT_OPT_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -134,6 +135,7 @@ void iqconverter_float_opt_reset(iqconverter_float_opt_t *cnv);
  * - Single memory pass instead of two
  */
 void iqconverter_float_opt_process_u16(iqconverter_float_opt_t *cnv,
+				       const iqconv_lut_t *table,
 				       const uint16_t *src,
 				       float *dest, int len);
 
@@ -144,6 +146,7 @@ void iqconverter_float_opt_process_u16(iqconverter_float_opt_t *cnv,
  * Uses 8-bit LUT (256 entries) for ADC -> float32 conversion.
  */
 void iqconverter_float_opt_process_u8(iqconverter_float_opt_t *cnv,
+				      const iqconv_lut_t *table,
 				      const uint8_t *src,
 				      float *dest, int len);
 

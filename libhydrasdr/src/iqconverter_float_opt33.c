@@ -101,6 +101,7 @@ void iqconverter_float_opt33_reset(iqconverter_float_opt33_t *cnv)
  */
 OPT_HOT
 void iqconverter_float_opt33_process_u16(iqconverter_float_opt33_t *cnv,
+					 const iqconv_lut_t *table,
 					 const uint16_t * OPT_RESTRICT src,
 					 float * OPT_RESTRICT dest, int len)
 {
@@ -114,7 +115,7 @@ void iqconverter_float_opt33_process_u16(iqconverter_float_opt33_t *cnv,
 	const float * OPT_RESTRICT kernel = (const float *)OPT_ALIGNED_64(cnv->fir_kernel);
 	float * OPT_RESTRICT fir_hist = (float *)OPT_ALIGNED_64(cnv->fir_queue);
 	float * OPT_RESTRICT dly_line = (float *)OPT_ALIGNED_64(cnv->delay_line);
-	const float * OPT_RESTRICT lut = (const float *)OPT_ALIGNED_64(iqconv_lut.lut_float32);
+	const float * OPT_RESTRICT lut = (const float *)OPT_ALIGNED_64(table->lut_float32);
 
 	int fir_idx = cnv->fir_index;
 	int dly_idx = cnv->delay_index;

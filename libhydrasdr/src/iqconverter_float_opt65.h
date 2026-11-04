@@ -20,6 +20,7 @@
 #define IQCONVERTER_FLOAT_OPT65_H
 
 #include <stdint.h>
+#include "iqconverter_lut.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -102,6 +103,7 @@ void iqconverter_float_opt65_reset(iqconverter_float_opt65_t *cnv);
  * This eliminates branch misprediction penalty (~5-10 cycles per miss).
  */
 void iqconverter_float_opt65_process_u16(iqconverter_float_opt65_t *cnv,
+					 const iqconv_lut_t *table,
 					 const uint16_t *src,
 					 float *dest, int len);
 

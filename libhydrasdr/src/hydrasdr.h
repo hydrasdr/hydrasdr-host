@@ -131,10 +131,10 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include <stdint.h>
 #include "hydrasdr_commands.h"
 
-#define HYDRASDR_VERSION "1.1.3"
+#define HYDRASDR_VERSION "1.1.4"
 #define HYDRASDR_VER_MAJOR 1
 #define HYDRASDR_VER_MINOR 1
-#define HYDRASDR_VER_REVISION 3
+#define HYDRASDR_VER_REVISION 4
 
 /** @brief Auto-bandwidth mode for hydrasdr_set_bandwidth() */
 #define HYDRASDR_BANDWIDTH_AUTO UINT32_MAX

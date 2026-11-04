@@ -86,6 +86,7 @@ void iqconverter_float_opt_reset(iqconverter_float_opt_t *cnv)
  */
 OPT_HOT
 void iqconverter_float_opt_process_u16(iqconverter_float_opt_t *cnv,
+				       const iqconv_lut_t *table,
 				       const uint16_t * OPT_RESTRICT src,
 				       float * OPT_RESTRICT dest, int len)
 {
@@ -99,7 +100,7 @@ void iqconverter_float_opt_process_u16(iqconverter_float_opt_t *cnv,
 	const float * OPT_RESTRICT kernel = (const float *)OPT_ALIGNED_64(cnv->fir_kernel);
 	float * OPT_RESTRICT fir_hist = (float *)OPT_ALIGNED_64(cnv->fir_queue);
 	float * OPT_RESTRICT dly_line = (float *)OPT_ALIGNED_64(cnv->delay_line);
-	const float * OPT_RESTRICT lut = (const float *)OPT_ALIGNED_64(iqconv_lut.lut_float32);
+	const float * OPT_RESTRICT lut = (const float *)OPT_ALIGNED_64(table->lut_float32);
 
 	int fir_idx = cnv->fir_index;
 	int dly_idx = cnv->delay_index;
@@ -204,6 +205,7 @@ void iqconverter_float_opt_process_u16(iqconverter_float_opt_t *cnv,
  */
 OPT_HOT
 void iqconverter_float_opt_process_u8(iqconverter_float_opt_t *cnv,
+				      const iqconv_lut_t *table,
 				      const uint8_t * OPT_RESTRICT src,
 				      float * OPT_RESTRICT dest, int len)
 {
@@ -211,7 +213,7 @@ void iqconverter_float_opt_process_u8(iqconverter_float_opt_t *cnv,
 		return;
 
 	/* Validate LUT is initialized for 8-bit ADC */
-	if (OPT_UNLIKELY(iqconv_lut.adc_bits != IQCONV_ADC_8BIT))
+	if (OPT_UNLIKELY(table->adc_bits != IQCONV_ADC_8BIT))
 		return;
 
 	float avg = cnv->avg;
@@ -220,7 +222,7 @@ void iqconverter_float_opt_process_u8(iqconverter_float_opt_t *cnv,
 	const float * OPT_RESTRICT kernel = (const float *)OPT_ALIGNED_64(cnv->fir_kernel);
 	float * OPT_RESTRICT fir_hist = (float *)OPT_ALIGNED_64(cnv->fir_queue);
 	float * OPT_RESTRICT dly_line = (float *)OPT_ALIGNED_64(cnv->delay_line);
-	const float * OPT_RESTRICT lut = (const float *)OPT_ALIGNED_64(iqconv_lut.lut_float32);
+	const float * OPT_RESTRICT lut = (const float *)OPT_ALIGNED_64(table->lut_float32);
 
 	int fir_idx = cnv->fir_index;
 	int dly_idx = cnv->delay_index;

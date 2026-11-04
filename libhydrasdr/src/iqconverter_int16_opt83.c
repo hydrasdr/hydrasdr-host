@@ -63,6 +63,7 @@ void iqconverter_int16_opt83_reset(iqconverter_int16_opt83_t *cnv)
  */
 OPT_HOT
 void iqconverter_int16_opt83_process_u16(iqconverter_int16_opt83_t * OPT_RESTRICT cnv,
+					 const iqconv_lut_t *table,
 					 const uint16_t * OPT_RESTRICT src,
 					 int16_t * OPT_RESTRICT dest, int len)
 {
@@ -77,7 +78,7 @@ void iqconverter_int16_opt83_process_u16(iqconverter_int16_opt83_t * OPT_RESTRIC
 	int32_t * OPT_RESTRICT fir_buf = (int32_t *)OPT_ALIGNED_64(cnv->fir_buf);
 	const int32_t * OPT_RESTRICT kernel = (const int32_t *)OPT_ALIGNED_64(cnv->sym_kernel);
 	int16_t * OPT_RESTRICT dly_buf = (int16_t *)OPT_ALIGNED_64(cnv->dly_buf);
-	const int16_t * OPT_RESTRICT lut = (const int16_t *)OPT_ALIGNED_64(iqconv_lut.lut_int16);
+	const int16_t * OPT_RESTRICT lut = (const int16_t *)OPT_ALIGNED_64(table->lut_int16);
 
 	/* Prefetch first batch of LUT entries */
 	OPT_PREFETCH_READ(&lut[src[0]]);
@@ -97,45 +98,41 @@ void iqconverter_int16_opt83_process_u16(iqconverter_int16_opt83_t * OPT_RESTRIC
 		int32_t acc0, acc1;
 		int16_t q_in0, q_in1;
 		int16_t q_out0, q_out1;
-		int16_t w, s;
+		int16_t s;
 		int32_t u;
 
 		/* FUSED: LUT-based uint16_t -> int16 + DC Removal */
 		x0 = lut[src[i + 0]];
-		w = x0 - ox;
 		u = oe + (int32_t)oy * DC_ALPHA_Q15;
 		s = (int16_t)(u >> 15);
-		y0 = w + s;
-		oe = u - ((int32_t)s << 15);
+		y0 = SAT_I16((int32_t)x0 - ox + s);
+		oe = u - (int32_t)s * (1 << 15);
 		ox = x0; oy = y0;
 
 		x1 = lut[src[i + 1]];
-		w = x1 - ox;
 		u = oe + (int32_t)oy * DC_ALPHA_Q15;
 		s = (int16_t)(u >> 15);
-		y1 = w + s;
-		oe = u - ((int32_t)s << 15);
+		y1 = SAT_I16((int32_t)x1 - ox + s);
+		oe = u - (int32_t)s * (1 << 15);
 		ox = x1; oy = y1;
 
 		x2 = lut[src[i + 2]];
-		w = x2 - ox;
 		u = oe + (int32_t)oy * DC_ALPHA_Q15;
 		s = (int16_t)(u >> 15);
-		y2 = w + s;
-		oe = u - ((int32_t)s << 15);
+		y2 = SAT_I16((int32_t)x2 - ox + s);
+		oe = u - (int32_t)s * (1 << 15);
 		ox = x2; oy = y2;
 
 		x3 = lut[src[i + 3]];
-		w = x3 - ox;
 		u = oe + (int32_t)oy * DC_ALPHA_Q15;
 		s = (int16_t)(u >> 15);
-		y3 = w + s;
-		oe = u - ((int32_t)s << 15);
+		y3 = SAT_I16((int32_t)x3 - ox + s);
+		oe = u - (int32_t)s * (1 << 15);
 		ox = x3; oy = y3;
 
 		/* FIR I-Channel (Filter 0) - 42-tap symmetric (21 pairs) */
 		f_head = (f_head - 1) & FIR_BUF_MASK;
-		fir_buf[f_head] = (int32_t)((int16_t)(-y0));
+		fir_buf[f_head] = -(int32_t)y0;
 		fir_buf[f_head + FIR_BUF_SIZE] = fir_buf[f_head];
 
 		fir_src = &fir_buf[f_head];
@@ -202,9 +199,9 @@ void iqconverter_int16_opt83_process_u16(iqconverter_int16_opt83_t * OPT_RESTRIC
 		if (OPT_UNLIKELY(++d_head >= DELAY_SIZE)) d_head = 0;
 
 		/* Output */
-		dest[i + 0] = (int16_t)(acc0 >> 15);
+		dest[i + 0] = SAT_I16(acc0 >> 15);
 		dest[i + 1] = q_out0;
-		dest[i + 2] = (int16_t)(acc1 >> 15);
+		dest[i + 2] = SAT_I16(acc1 >> 15);
 		dest[i + 3] = q_out1;
 	}
 
