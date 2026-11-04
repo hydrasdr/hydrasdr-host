@@ -28,7 +28,7 @@ env:
 jobs:
   # Extract version once and share across all jobs
   extract-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -42,7 +42,7 @@ jobs:
   # Generate Doxygen documentation
   build_documentation:
     needs: extract-version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: Generate Documentation
     
     steps:
@@ -679,7 +679,7 @@ jobs:
 
   build_linux_distros:
     needs: extract-version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ${{ matrix.container }}
     
     strategy:
@@ -1259,7 +1259,7 @@ jobs:
       (needs.build_linux_distros.result == 'success' || needs.build_linux_distros.result == 'skipped') &&
       (needs.build_arm64_native.result == 'success' || needs.build_arm64_native.result == 'skipped') &&
       (needs.build_documentation.result == 'success' || needs.build_documentation.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - name: Download All Builds
       uses: actions/download-artifact@v8
@@ -1387,7 +1387,7 @@ jobs:
 
   update_nightly_release:
     needs: [extract-version, create_full_archive, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Run only if create_full_archive succeeded (which means all builds succeeded or were skipped)
     if: |
       !cancelled() &&
